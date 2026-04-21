@@ -185,13 +185,13 @@ export DASHBOARD_ADMIN_PASSWORD='<strong password>'
 The script:
 - Creates `~/traefik/` with the correct directory + file permissions
 - Writes `.env` (Cloudflare token, mode 600)
-- Generates a bcrypt basicauth hash for the dashboard and writes `dynamic.yml`
+- Generates a bcrypt basicauth hash for the dashboard and writes `dynamic.d/00-base.yml` (dashboard middleware + shared `insecure-upstream` transport)
 - Writes `docker-compose.yml` with the working v3.6.6 configuration (static config via `command:` flags; Docker provider + file provider; dashboard via labels; basicauth middleware attached)
 - Runs `docker compose up -d` and tails the logs
 
 Expected progression in the logs:
 1. Provider `docker` starts watching `/var/run/docker.sock`
-2. Provider `file` loads `dynamic.yml`
+2. Provider `file` loads files from `dynamic.d/`
 3. Router `dashboard@docker` registered, requests TLS
 4. ACME client contacts Cloudflare DNS API
 5. DNS-01 TXT record created, Let's Encrypt validates
@@ -255,7 +255,7 @@ Example for Grafana:
 
 No DNS change needed — the Prereq 5 wildcard already covers every `*.lab.hezebonica.ca` name.
 
-For services **not** in Docker (bare-metal host, TV, IoT), use Traefik's file provider in `dynamic.yml`:
+For services **not** in Docker (bare-metal host, TV, IoT), drop a new YAML file into `~/traefik/dynamic.d/`. Traefik's file provider watches the directory and hot-reloads. Example `~/traefik/dynamic.d/10-proxmox.yml`:
 
 ```yaml
 http:
@@ -272,10 +272,9 @@ http:
         servers:
           - url: "https://192.168.57.7:8006"
         serversTransport: insecure-upstream
-  serversTransports:
-    insecure-upstream:
-      insecureSkipVerify: true
 ```
+
+The `insecure-upstream` transport is defined centrally in `dynamic.d/00-base.yml` (owned by `traefik-setup.sh`) — per-service files just reference it by name. For scripted service additions see [`scripts/README.md`](./scripts/README.md) (e.g. `traefik-add-pve-prod-cluster.sh`).
 
 ---
 
@@ -291,6 +290,6 @@ http:
 
 - Let's Encrypt rate limit: 50 certs/week/domain. The wildcard approach keeps this far under.
 - Back up `acme.json` — losing it forces re-issuance on rebuild (harmless, but noisy).
-- Traefik reloads Docker label changes automatically; `dynamic.yml` is watched and reloaded (`--providers.file.watch=true`). Changes to the `command:` block in `docker-compose.yml` require `docker compose up -d --force-recreate`.
+- Traefik reloads Docker label changes automatically; files under `dynamic.d/` are watched and reloaded on add/remove/change (`--providers.file.watch=true`). Changes to the `command:` block in `docker-compose.yml` require `docker compose up -d --force-recreate`.
 - If DNS-01 fails, check: token validity, outbound UDP/TCP 53 to `1.1.1.1` / `8.8.8.8`, Cloudflare zone is Active.
 - Auto-renewal: Traefik checks certs at startup and every 24h. Renews 30 days before expiry. No cron, no manual step.

@@ -125,7 +125,7 @@ gitlab-runners     gitlab-runner (k8s executor, spawns per-job pods)
 LAN DNS wildcard `*.lab.hezebonica.ca` already points at `192.168.57.8`. Traefik's file provider routes each cluster service to its MetalLB IP:
 
 ```yaml
-# ~/traefik/dynamic.yml on the edge VM
+# ~/traefik/dynamic.d/30-k8s-services.yml on the edge VM
 http:
   routers:
     gitlab:

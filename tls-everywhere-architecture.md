@@ -168,7 +168,7 @@ Traefik v3.6.6 runs in Docker on the VM, bound to ports 80 and 443. It does thre
 Service discovery uses two providers in parallel:
 
 - **Docker provider** — any container on the `web` Docker network with `traefik.enable=true` labels gets auto-registered. Fast path for services that run on the Traefik VM itself.
-- **File provider** — `dynamic.yml` is watched (`--providers.file.watch=true`) and reloaded within seconds of edit. Used for services that aren't containers Traefik can see (Proxmox UI, off-host Docker hosts, future k8s MetalLB IPs).
+- **File provider** — files under `dynamic.d/` are watched (`--providers.file.watch=true`) and reloaded within seconds of add/remove/change. Used for services that aren't containers Traefik can see (Proxmox UI, off-host Docker hosts, future k8s MetalLB IPs). Each service owns its own file; `traefik-setup.sh` only owns `00-base.yml`.
 
 ### Config delivery — command-line flags, not `traefik.yml`
 
@@ -181,7 +181,7 @@ Two reasons:
 
 ### Dashboard — behind basicauth on HTTPS only
 
-The Traefik dashboard is exposed at `https://traefik.lab.hezebonica.ca`, gated by a basicauth middleware defined in `dynamic.yml`. There is no unauthenticated HTTP surface:
+The Traefik dashboard is exposed at `https://traefik.lab.hezebonica.ca`, gated by a basicauth middleware defined in `dynamic.d/00-base.yml`. There is no unauthenticated HTTP surface:
 
 - Port 80 redirects to HTTPS
 - Port 8080 (the legacy "insecure" API) is not bound
@@ -258,7 +258,7 @@ Traefik's Docker provider picks up the labels within seconds. No DNS change — 
 ### Pattern B — off-host service via file provider
 
 ```yaml
-# dynamic.yml
+# ~/traefik/dynamic.d/10-proxmox.yml
 http:
   routers:
     proxmox:
@@ -273,10 +273,9 @@ http:
         servers:
           - url: "https://192.168.57.7:8006"
         serversTransport: insecure-upstream
-  serversTransports:
-    insecure-upstream:
-      insecureSkipVerify: true
 ```
+
+The `insecure-upstream` transport is defined once in `dynamic.d/00-base.yml` (owned by `traefik-setup.sh`); per-service files just reference it by name.
 
 `insecureSkipVerify: true` is acceptable on LAN: TLS between client and Traefik is fully verified; the Traefik → upstream leg is inside the same subnet and the upstream's self-signed cert is a known quantity.
 
@@ -301,7 +300,7 @@ The k8s cluster (`devops-cluster-architecture.md`) will expose services via Meta
 - **Auto-renewal**: Traefik checks certs at startup and every 24h after. Renews 30 days before expiry. No cron, no manual step.
 - **Restart on Docker/Traefik updates**: A routine `docker compose pull && docker compose up -d` on the VM picks up new images. Takes ~15 seconds of downtime. Certs in `acme.json` persist across restarts.
 - **Disaster recovery**: If the VM is lost, `terraform apply` rebuilds it from scratch in ~5 minutes. Re-running Traefik will re-issue the wildcard from Let's Encrypt. Nothing else to restore unless you want to preserve the existing cert (back up `acme.json`).
-- **Config changes**: `dynamic.yml` is hot-reloaded. `docker-compose.yml` `command:` changes require `docker compose up -d --force-recreate`.
+- **Config changes**: files under `dynamic.d/` are hot-reloaded on add/remove/change. `docker-compose.yml` `command:` changes require `docker compose up -d --force-recreate`.
 
 ## Consciously-accepted trade-offs
 

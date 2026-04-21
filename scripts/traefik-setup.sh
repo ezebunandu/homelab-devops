@@ -3,11 +3,17 @@
 # traefik-setup.sh — stand up Traefik on the host VM.
 #
 # Runs as the service user (e.g. sam) on the Traefik VM. Idempotent:
-#   - Creates ~/traefik/ with gitignore-safe file permissions
+#   - Creates ~/traefik/ + ~/traefik/dynamic.d/ with gitignore-safe file permissions
 #   - Writes .env with the Cloudflare DNS API token (mode 600)
 #   - Generates a bcrypt-hashed basicauth user for the dashboard
-#   - Writes dynamic.yml + docker-compose.yml with the working v3.6.6 config
+#   - Writes dynamic.d/00-base.yml (dashboard middleware + shared insecure-upstream transport)
+#   - Writes docker-compose.yml with the working v3.6.6 config
 #   - Starts / recreates the container
+#
+# Adding services: drop a new YAML file under ~/traefik/dynamic.d/ (e.g.
+# 20-pve-prod-cluster.yml). Traefik's file provider watches the directory and
+# hot-reloads. This script only touches 00-base.yml on re-run; other files are
+# preserved.
 #
 # Required env vars:
 #   CF_DNS_API_TOKEN            Cloudflare API token (Zone:DNS:Edit scope)
@@ -48,9 +54,18 @@ require_cmd() {
 
 prepare_dirs() {
   log "Preparing ${TRAEFIK_DIR}"
-  mkdir -p "${TRAEFIK_DIR}/letsencrypt"
+  mkdir -p "${TRAEFIK_DIR}/letsencrypt" "${TRAEFIK_DIR}/dynamic.d"
   touch "${TRAEFIK_DIR}/letsencrypt/acme.json"
   chmod 600 "${TRAEFIK_DIR}/letsencrypt/acme.json"
+
+  # One-time migration from the legacy single-file layout. Moves ~/traefik/dynamic.yml
+  # into dynamic.d/ so any manually-added service routes survive. The legacy file will
+  # duplicate the dashboard-auth middleware that 00-base.yml now owns — review it once
+  # and trim the middleware block.
+  if [ -f "${TRAEFIK_DIR}/dynamic.yml" ]; then
+    log "Migrating legacy dynamic.yml → dynamic.d/99-legacy.yml (review: trim duplicate dashboard-auth block)"
+    mv "${TRAEFIK_DIR}/dynamic.yml" "${TRAEFIK_DIR}/dynamic.d/99-legacy.yml"
+  fi
 }
 
 write_env() {
@@ -61,19 +76,24 @@ EOF
   chmod 600 "${TRAEFIK_DIR}/.env"
 }
 
-write_dynamic() {
+write_base_dynamic() {
   log "Generating bcrypt hash for dashboard user '${DASHBOARD_ADMIN_USER}'"
   local auth_hash
   auth_hash=$(htpasswd -nbB "${DASHBOARD_ADMIN_USER}" "${DASHBOARD_ADMIN_PASSWORD}")
 
-  log "Writing ${TRAEFIK_DIR}/dynamic.yml"
-  cat > "${TRAEFIK_DIR}/dynamic.yml" <<EOF
+  log "Writing ${TRAEFIK_DIR}/dynamic.d/00-base.yml"
+  cat > "${TRAEFIK_DIR}/dynamic.d/00-base.yml" <<EOF
+# Owned by traefik-setup.sh — do not edit directly.
+# Add service routes as separate files in dynamic.d/ (e.g. 10-my-service.yml).
 http:
   middlewares:
     dashboard-auth:
       basicAuth:
         users:
           - '${auth_hash}'
+  serversTransports:
+    insecure-upstream:
+      insecureSkipVerify: true
 EOF
 }
 
@@ -92,7 +112,7 @@ services:
       - CF_DNS_API_TOKEN=\${CF_DNS_API_TOKEN}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
-      - ./dynamic.yml:/etc/traefik/dynamic.yml:ro
+      - ./dynamic.d:/etc/traefik/dynamic.d:ro
       - ./letsencrypt:/letsencrypt
     command:
       - "--log.level=INFO"
@@ -104,7 +124,7 @@ services:
       - "--providers.docker=true"
       - "--providers.docker.exposedByDefault=false"
       - "--providers.docker.network=web"
-      - "--providers.file.filename=/etc/traefik/dynamic.yml"
+      - "--providers.file.directory=/etc/traefik/dynamic.d"
       - "--providers.file.watch=true"
       - "--certificatesresolvers.cloudflare.acme.email=${LE_EMAIL}"
       - "--certificatesresolvers.cloudflare.acme.storage=/letsencrypt/acme.json"
@@ -148,7 +168,7 @@ main() {
 
   prepare_dirs
   write_env
-  write_dynamic
+  write_base_dynamic
   write_compose
   start_stack
   log "Dashboard: https://${DASHBOARD_HOST} (basicauth as ${DASHBOARD_ADMIN_USER})"

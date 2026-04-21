@@ -5,7 +5,8 @@ Three idempotent bash scripts that replace the copy-paste command blocks in the 
 | Script | Where it runs | What it does |
 |---|---|---|
 | `proxmox-setup.sh` | PVE node, as `root` | Node DNS, snippets storage, Terraform role/user/token |
-| `traefik-setup.sh` | Traefik VM, as service user | `~/traefik/` compose stack with the v3.6.6 config that works against Docker 29 |
+| `traefik-setup.sh` | Traefik VM, as service user | `~/traefik/` compose stack with the v3.6.6 config that works against Docker 29; owns `dynamic.d/00-base.yml` |
+| `traefik-add-pve-prod-cluster.sh` | Traefik VM, as service user | Drops `dynamic.d/20-pve-prod-cluster.yml` with routes for the 3 prod Proxmox nodes |
 | `pihole-wildcard.sh` | Host running the Pi-hole container, with sudo | Writes the `address=/<subdomain>/<ip>` record, validates, reloads |
 
 ## `proxmox-setup.sh`
@@ -73,6 +74,36 @@ TRAEFIK_IMAGE=traefik:v3.6.6
 After the first successful run the wildcard LE cert is issued; subsequent runs reuse it from `~/traefik/letsencrypt/acme.json`.
 
 The script tails the Traefik logs at the end. `Ctrl+C` stops the tail — the container keeps running.
+
+### Directory-based `dynamic.d/`
+
+`traefik-setup.sh` owns only `~/traefik/dynamic.d/00-base.yml` (dashboard basicauth middleware + shared `insecure-upstream` transport). Service routes belong in their own files under `dynamic.d/` — re-running `traefik-setup.sh` preserves them. Traefik's file provider watches the directory and hot-reloads on file add/remove/change.
+
+Adding a service = drop a new file under `dynamic.d/` (or run one of the helper scripts below).
+
+If the VM is still on the legacy single-file `~/traefik/dynamic.yml` layout, re-run `traefik-setup.sh` — it auto-migrates to `dynamic.d/99-legacy.yml` so manually-added routes are preserved. Trim the duplicated `dashboard-auth` middleware block from `99-legacy.yml` once after migration.
+
+## `traefik-add-pve-prod-cluster.sh`
+
+Run on the Traefik VM as the service user. Idempotent; re-running overwrites the file with the same content. Requires `dynamic.d/` to already exist.
+
+```bash
+./traefik-add-pve-prod-cluster.sh
+```
+
+**Env var overrides:**
+
+```
+PVE_PROD_1_IP=192.168.227.2
+PVE_PROD_2_IP=192.168.227.3
+PVE_PROD_3_IP=192.168.227.250
+PVE_PROD_1_HOST=pve-prod-1.lab.hezebonica.ca
+PVE_PROD_2_HOST=pve-prod-2.lab.hezebonica.ca
+PVE_PROD_3_HOST=pve-prod-3.lab.hezebonica.ca
+TRAEFIK_DIR=$HOME/traefik
+```
+
+No Traefik restart needed — the file provider hot-reloads within a few seconds.
 
 ## `pihole-wildcard.sh`
 
