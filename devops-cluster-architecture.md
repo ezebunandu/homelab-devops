@@ -6,14 +6,14 @@ Stand up a Kubernetes cluster (Talos Linux nodes on Proxmox VMs) hosting the hom
 
 This cluster is the **management plane** for a separate production cluster running home-automation workloads on different hardware on a different subnet. That prod cluster pulls images from Harbor, reads secrets from Vault, and runs its own ArgoCD against the same GitOps repo.
 
-## Relationship to `homelab-makeover.md`
+## Relationship to M1 (TLS Everywhere)
 
-Prereqs delivered by the makeover:
+Prereqs delivered by M1 (see [`README.md`](./README.md)):
 - Working wildcard DNS (`*.lab.hezebonica.ca` → Traefik VM at `192.168.57.8`)
 - Valid Let's Encrypt wildcard cert at the edge
 - Proxmox node + Terraform credentials (`terraform@pve` token, passwordless SSH)
 
-This doc picks up where step 6 of the makeover milestone order leaves off.
+This doc is M2 — it assumes M1 is complete.
 
 ## Decisions locked in (2026-04-20)
 

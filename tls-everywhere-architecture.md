@@ -1,6 +1,6 @@
 # TLS Everywhere — Architecture Write-up
 
-Implementation record for the homelab's edge TLS setup. Focuses on **why each choice was made**; the how-to lives in `homelab-makeover.md` and `traefik-bringup.md`.
+Implementation record for the homelab's edge TLS setup. Focuses on **why each choice was made**; the reproducible procedure lives in [`tls-everywhere-runbook.md`](./tls-everywhere-runbook.md). Project-level framing is in [`README.md`](./README.md).
 
 ## Problem statement
 
@@ -311,7 +311,7 @@ The k8s cluster (`devops-cluster-architecture.md`) will expose services via Meta
 | Single Traefik VM = single point of failure for ingress | At homelab scale, recovery is 5 min. HA would add Keepalived/VRRP complexity for a problem that's never bitten. |
 | All services share one wildcard cert's identity | If the cert is compromised, every service needs re-issuance. `acme.json` permissions + VM isolation make this low-probability. |
 | Cloudflare DNS dependency | Trust is scoped: Cloudflare can observe zone changes (which domains exist) but not service traffic. |
-| Pi-hole on Firewalla — config lives under `/home/pi/.firewalla/run/` | Firewalla firmware updates may rebuild `run/` state. The one-line dnsmasq config is trivial to re-add; noted in `homelab-makeover.md`. |
+| Pi-hole on Firewalla — config lives under `/home/pi/.firewalla/run/` | Firewalla firmware updates may rebuild `run/` state. The one-line dnsmasq config is trivial to re-add; recovery procedure in [`tls-everywhere-runbook.md`](./tls-everywhere-runbook.md). |
 
 ## What this setup does NOT do
 
@@ -323,7 +323,7 @@ The k8s cluster (`devops-cluster-architecture.md`) will expose services via Meta
 
 ## Pointers
 
-- **Plan + runbook**: [`homelab-makeover.md`](./homelab-makeover.md)
-- **Copy-paste bring-up**: [`traefik-bringup.md`](./traefik-bringup.md)
+- **Project overview**: [`README.md`](./README.md)
+- **Bring-up runbook**: [`tls-everywhere-runbook.md`](./tls-everywhere-runbook.md)
 - **VM Terraform module**: `terraform/traefik-vm/`
 - **Next milestone**: [`devops-cluster-architecture.md`](./devops-cluster-architecture.md)
