@@ -1,0 +1,36 @@
+#cloud-config
+hostname: ${hostname}
+manage_etc_hosts: true
+
+users:
+  - name: ${admin_user}
+    groups: [sudo, docker]
+    sudo: ALL=(ALL) NOPASSWD:ALL
+    shell: /bin/bash
+    ssh_authorized_keys:
+      - ${ssh_public_key}
+
+package_update: true
+package_upgrade: true
+packages:
+  - qemu-guest-agent
+  - curl
+  - ca-certificates
+  - gnupg
+  - apache2-utils   # htpasswd, used by scripts/traefik-setup.sh
+
+runcmd:
+  - systemctl enable --now qemu-guest-agent
+  - install -m 0755 -d /etc/apt/keyrings
+  - curl -fsSL https://download.docker.com/linux/debian/gpg -o /etc/apt/keyrings/docker.asc
+  - chmod a+r /etc/apt/keyrings/docker.asc
+  - |
+    echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/debian bookworm stable" \
+      > /etc/apt/sources.list.d/docker.list
+  - apt-get update
+  - apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+  - usermod -aG docker ${admin_user}
+
+power_state:
+  mode: reboot
+  condition: true

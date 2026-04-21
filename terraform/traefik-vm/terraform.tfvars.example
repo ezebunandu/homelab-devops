@@ -1,0 +1,15 @@
+# Copy to terraform.tfvars and fill in. terraform.tfvars is gitignored.
+#
+# pve_api_token is NOT set here — export it via environment instead:
+#   export TF_VAR_pve_api_token='terraform@pve!main=xxxxxxxx-...'
+# See .envrc.example for an automated approach (direnv).
+
+pve_endpoint     = "https://192.168.57.7:8006/"
+pve_node         = "devops"
+pve_insecure_tls = true
+
+vm_ip_cidr = "192.168.57.8/24"
+vm_gateway = "192.168.57.1"
+
+# Paste the contents of your ssh pubkey (one line)
+ssh_public_key = "ssh-ed25519 AAAA... sam@laptop"

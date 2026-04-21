@@ -1,0 +1,14 @@
+# Copy to .envrc (gitignored) and `direnv allow` in this directory.
+# Any TF_VAR_<name> env var is automatically picked up by Terraform.
+
+# Option A: paste directly (simplest, plaintext on disk)
+# export TF_VAR_pve_api_token='terraform@pve!main=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx'
+
+# Option B: read from 1Password (requires `op` CLI signed in)
+# export TF_VAR_pve_api_token="$(op read 'op://homelab/pve-terraform-token/credential')"
+
+# Option C: read from macOS Keychain
+# Store once:
+#   security add-generic-password -s pve-terraform-token -a "$USER" -w 'terraform@pve!main=...'
+# Then:
+# export TF_VAR_pve_api_token="$(security find-generic-password -s pve-terraform-token -a "$USER" -w)"
