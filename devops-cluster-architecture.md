@@ -86,6 +86,8 @@ Production cluster on a different subnet — no CIDR collisions. Inter-subnet ro
 | Vault | 192.168.57.103 |
 | (reserved) | 192.168.57.104–.120 |
 
+**Note:** this range overlaps Firewalla's default DHCP pool. Before DC-3, shrink Firewalla's DHCP allocation to start at `.121` (or statically reserve `.100–.120`) so DHCP leases can't collide with LoadBalancer IPs.
+
 ## Stack + namespace layout
 
 ```
@@ -385,3 +387,4 @@ Steps 1–8 are one-shot. Step 9 is hands-off (watch ArgoCD sync). Steps 10–13
 - **Dedicated observability cluster** — blast-radius isolation, long-term consideration
 - **Cluster upgrades** — `talosctl upgrade` per node; rehearse before production-critical use
 - **Disaster recovery** — etcd snapshots via Talos; Velero for PV/k8s state
+- **IP-allocation pre-flight** — an `arping`-based Terraform `data "external"` that fails a plan if the target IP is live on the LAN. Cheap belt-and-braces against static-IP collisions for Talos nodes, kube-vip VIP, and future scratch/service VMs. Firewalla API integration (for visibility into *leased-but-offline* devices + active IP reservation) is strictly heavier; only worth it if we also want reservation semantics. Deferred — revisit if the DHCP-pool shrink (above) ends up not sufficient.

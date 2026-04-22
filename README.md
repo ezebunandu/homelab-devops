@@ -58,6 +58,9 @@ Design: [`devops-cluster-architecture.md`](./devops-cluster-architecture.md).
 
 Sub-milestones:
 
+**Pre-requisite (before DC-3):**
+- [ ] Shrink Firewalla DHCP pool to exclude MetalLB's `192.168.57.100–.120` range (or reserve that block as static). Prevents DHCP leases colliding with LoadBalancer IPs.
+
 - [ ] **DC-1** — Terraform module for 3 Talos VMs (`terraform/talos-cluster/`)
 - [ ] **DC-2** — Talos machine configs + kube-vip API VIP at `192.168.57.30`
 - [ ] **DC-3** — Install Cilium, MetalLB, Longhorn, ArgoCD (imperative bootstrap)

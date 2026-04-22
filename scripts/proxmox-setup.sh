@@ -32,6 +32,7 @@ PRIVS="Datastore.Allocate Datastore.AllocateSpace Datastore.Audit Datastore.Allo
 Pool.Allocate Pool.Audit \
 Sys.Audit Sys.Console Sys.Modify \
 VM.Allocate VM.Audit VM.Clone VM.Migrate VM.PowerMgmt \
+VM.GuestAgent.Audit \
 VM.Config.CDROM VM.Config.Cloudinit VM.Config.CPU VM.Config.Disk \
 VM.Config.HWType VM.Config.Memory VM.Config.Network VM.Config.Options \
 SDN.Use"

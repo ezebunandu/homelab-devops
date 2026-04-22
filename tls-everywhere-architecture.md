@@ -154,6 +154,7 @@ Future: once Vault is running in the devops cluster, state can move to Vault KV 
 - `Snippets` content type enabled on the `local` datastore (needed for cloud-init user-data)
 - `Datastore.Allocate` **and** `Datastore.AllocateSpace` privileges (both required as of PVE 9; the former for snippet upload, the latter for disk allocation)
 - `VM.Monitor` privilege was removed in PVE 9 — listing it in the role definition will reject the whole call
+- `VM.GuestAgent.Audit` is required when Terraform VMs have `agent.enabled = true` (bpg queries the guest agent for network interfaces post-boot)
 
 Two of these last four cost debugging time during bring-up and are now documented.
 

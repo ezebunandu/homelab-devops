@@ -85,7 +85,7 @@ terraform apply
 - Installer hangs on Quadro K4000 without `nomodeset` boot flag
 - DNS needs to be set explicitly on PVE (`pvesh set /nodes/devops/dns --dns1 1.1.1.1 --dns2 8.8.8.8`) or image downloads fail
 - Fresh KVM state sometimes panics new VMs on first boot — a single host reboot clears it
-- Role privilege `VM.Monitor` was removed in PVE 9.x; `Datastore.Allocate` is required in addition to `AllocateSpace` for snippet uploads
+- PVE 9.x role-privilege changes bit us repeatedly: `VM.Monitor` was removed (listing it rejects the whole role definition); `Datastore.Allocate` is required in addition to `AllocateSpace` for snippet uploads; `VM.GuestAgent.Audit` is required whenever the Terraform VM has `agent.enabled = true` (bpg queries the guest agent for IPs post-boot — without it you get `HTTP 403 ... VM.GuestAgent.Audit|VM.GuestAgent.Unrestricted`)
 - Traefik requires **v3.6.6+** on Docker 29. Earlier v3.x silently fails container discovery via the Docker provider ([traefik/traefik#12253](https://github.com/traefik/traefik/issues/12253)). Also pass static config via `command:` flags rather than a mounted `traefik.yml` — v3.6 behaves inconsistently when both are present.
 
 ## Prereq 5 — Pi-hole wildcard for `*.lab.hezebonica.ca`
