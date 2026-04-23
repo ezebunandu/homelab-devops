@@ -1,0 +1,4 @@
+# Copy to .envrc and fill in — direnv will export automatically on cd
+# direnv allow .
+
+export TF_VAR_pve_api_token='terraform@pve!main=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx'

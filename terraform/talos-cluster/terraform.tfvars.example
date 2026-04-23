@@ -1,0 +1,20 @@
+# pve_api_token is intentionally absent — export via TF_VAR_pve_api_token
+# export TF_VAR_pve_api_token='terraform@pve!main=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx'
+
+pve_endpoint     = "https://192.168.57.7:8006/"
+pve_insecure_tls = true
+pve_node         = "devops"
+
+cluster_name     = "devops"
+cluster_vip      = "192.168.57.30"
+cluster_endpoint = "https://192.168.57.30:6443"
+gateway          = "192.168.57.1"
+
+talos_version      = "v1.12.6"
+kubernetes_version = "v1.35.2"
+
+nodes = {
+  talos-01 = { ip = "192.168.57.20" }
+  talos-02 = { ip = "192.168.57.21" }
+  talos-03 = { ip = "192.168.57.22" }
+}
