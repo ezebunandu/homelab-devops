@@ -24,6 +24,14 @@ data "talos_image_factory_urls" "this" {
 # Generated once and stored in Terraform state. Back up the state file.
 resource "talos_machine_secrets" "cluster" {}
 
+# Renders the talosconfig YAML from the cluster secrets.
+data "talos_client_configuration" "this" {
+  cluster_name         = var.cluster_name
+  client_configuration = talos_machine_secrets.cluster.client_configuration
+  endpoints            = [for name, node in var.nodes : node.ip]
+  nodes                = [for name, node in var.nodes : node.ip]
+}
+
 # Base control plane machine configuration (rendered once, patched per-node).
 data "talos_machine_configuration" "controlplane" {
   cluster_name       = var.cluster_name
@@ -52,13 +60,17 @@ resource "talos_machine_configuration_apply" "node" {
         proxy   = { disabled = true }
       }
     }),
+    # Per-node hostname — must be a separate patch from the interfaces block
+    # to avoid "static hostname already set" validation errors on re-apply.
+    yamlencode({
+      machine = { network = { hostname = each.key } }
+    }),
     # Per-node network: static IP + default route + Talos native L2 VIP.
     # The VIP (192.168.57.30) floats to whichever control-plane node holds
     # the etcd lease — no kube-vip pod required.
     yamlencode({
       machine = {
         network = {
-          hostname = each.key
           interfaces = [{
             interface = "eth0"
             addresses = ["${each.value.ip}/24"]

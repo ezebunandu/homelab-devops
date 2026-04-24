@@ -6,7 +6,7 @@ output "kubeconfig" {
 
 output "talosconfig" {
   description = "talosctl client config. Write to ~/.talos/config."
-  value       = talos_machine_secrets.cluster.client_configuration
+  value       = data.talos_client_configuration.this.talos_config
   sensitive   = true
 }
 
