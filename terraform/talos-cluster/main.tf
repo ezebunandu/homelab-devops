@@ -48,8 +48,9 @@ resource "proxmox_virtual_environment_vm" "talos" {
   boot_order = ["scsi0"]
 
   network_device {
-    bridge = "vmbr0"
-    model  = "virtio"
+    bridge      = "vmbr0"
+    model       = "virtio"
+    mac_address = each.value.mac
   }
 
   operating_system {

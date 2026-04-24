@@ -57,12 +57,13 @@ variable "kubernetes_version" {
 
 variable "nodes" {
   type = map(object({
-    ip = string
+    ip  = string
+    mac = string
   }))
   default = {
-    talos-01 = { ip = "192.168.57.20" }
-    talos-02 = { ip = "192.168.57.21" }
-    talos-03 = { ip = "192.168.57.22" }
+    talos-01 = { ip = "192.168.57.20", mac = "BC:24:11:6E:9D:82" }
+    talos-02 = { ip = "192.168.57.21", mac = "BC:24:11:9F:9F:BC" }
+    talos-03 = { ip = "192.168.57.22", mac = "BC:24:11:D4:8C:AE" }
   }
-  description = "Map of node names to their static IP addresses."
+  description = "Map of node names to their static IPs and pinned MAC addresses."
 }
