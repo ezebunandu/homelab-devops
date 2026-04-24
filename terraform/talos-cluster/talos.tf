@@ -60,11 +60,6 @@ resource "talos_machine_configuration_apply" "node" {
         proxy   = { disabled = true }
       }
     }),
-    # Per-node hostname — must be a separate patch from the interfaces block
-    # to avoid "static hostname already set" validation errors on re-apply.
-    yamlencode({
-      machine = { network = { hostname = each.key } }
-    }),
     # Per-node network: static IP + default route + Talos native L2 VIP.
     # The VIP (192.168.57.30) floats to whichever control-plane node holds
     # the etcd lease — no kube-vip pod required.
