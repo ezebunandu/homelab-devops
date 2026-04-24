@@ -1,10 +1,9 @@
 # Homelab bring-up scripts
 
-Three idempotent bash scripts that replace the copy-paste command blocks in the plan. Each is self-contained and safe to re-run.
-
 | Script | Where it runs | What it does |
 |---|---|---|
 | `proxmox-setup.sh` | PVE node, as `root` | Node DNS, snippets storage, Terraform role/user/token |
+| `proxmox-storage-setup.sh` | PVE node, as `root` | Extends `local-lvm` into the free tail of `/dev/sda`; optionally wipes `/dev/sdb` and creates `local-ssd` thin pool for Talos system disks |
 | `traefik-setup.sh` | Traefik VM, as service user | `~/traefik/` compose stack with the v3.6.6 config that works against Docker 29; owns `dynamic.d/00-base.yml` |
 | `traefik-add-pve-prod-cluster.sh` | Traefik VM, as service user | Drops `dynamic.d/20-pve-prod-cluster.yml` with routes for the 3 prod Proxmox nodes |
 | `pihole-wildcard.sh` | Host running the Pi-hole container, with sudo | Writes the `address=/<subdomain>/<ip>` record, validates, reloads |
@@ -48,6 +47,40 @@ Then in `terraform/traefik-vm/`:
 terraform init
 terraform apply
 ```
+
+## `proxmox-storage-setup.sh`
+
+Run once on the Proxmox node (SSH as root, or Datacenter → node → Shell) ahead of provisioning the Talos cluster (DC-1). Idempotent — re-runs skip already-completed steps.
+
+Two independent operations:
+
+1. **Extend `local-lvm`** into the free tail of `/dev/sda`. The PVE installer only claimed ~238 GB of the 1 TB spindle; this script creates `/dev/sda4` from the unallocated space, adds it to the `pve` VG, and grows the `pve/data` thin pool. Non-destructive — only touches unallocated space.
+2. **Convert `/dev/sdb`** from its existing Windows install into a fresh `local-ssd` LVM-thin pool. Dedicated fast tier for Talos system disks (scsi0) so etcd fsyncs don't sit on the spindle. **Destructive** — requires explicit confirmation.
+
+```bash
+# Dry run — extends local-lvm only; reports what would happen to /dev/sdb
+./proxmox-storage-setup.sh
+
+# Full run — also wipes /dev/sdb and creates local-ssd
+CONFIRM_WIPE_SSD=yes ./proxmox-storage-setup.sh
+```
+
+**Env var overrides:**
+
+```
+HDD_DEVICE=/dev/sda
+HDD_VG=pve
+HDD_THINPOOL=data
+SSD_DEVICE=/dev/sdb
+SSD_VG=pve-ssd
+SSD_THINPOOL=data
+SSD_STORAGE_NAME=local-ssd
+CONFIRM_WIPE_SSD=no
+```
+
+**Safety guards:** refuses to touch the HDD if `/dev/sda3` isn't the PV backing the expected VG; refuses to wipe the SSD if any partition is mounted or if the device already holds LVM PVs for any VG.
+
+After the script finishes, `pvesm status` should show two thin-pool storages: `local-lvm` (~950 GB on the spindle) and `local-ssd` (~235 GB on the SSD).
 
 ## `traefik-setup.sh`
 
@@ -131,3 +164,5 @@ CONTAINER_NAME=pihole-v6 CONFIG_DIR=/var/lib/pihole/dnsmasq.d ./pihole-wildcard.
 ```
 
 Steps 2 and 3 can run in parallel once step 1 finishes.
+
+For the DevOps cluster (M2), run `scripts/proxmox-storage-setup.sh` on the PVE node before `terraform apply` in `terraform/talos-cluster/`.

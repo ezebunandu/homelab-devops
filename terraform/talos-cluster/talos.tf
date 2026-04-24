@@ -65,6 +65,11 @@ resource "talos_machine_configuration_apply" "node" {
     # the etcd lease — no kube-vip pod required.
     yamlencode({
       machine = {
+        kubelet = {
+          nodeIP = {
+            validSubnets = ["192.168.57.0/24"]
+          }
+        }
         network = {
           interfaces = [{
             interface = "eth0"
