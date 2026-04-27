@@ -56,4 +56,10 @@ resource "proxmox_virtual_environment_vm" "talos" {
   operating_system {
     type = "l26"
   }
+
+  # The file_id (boot image) is ignored after initial creation — node OS upgrades
+  # are done via `talosctl upgrade`, not by replacing the VM disk through terraform.
+  lifecycle {
+    ignore_changes = [disk[0].file_id]
+  }
 }

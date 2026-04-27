@@ -5,7 +5,11 @@ resource "talos_image_factory_schematic" "this" {
   schematic = yamlencode({
     customization = {
       systemExtensions = {
-        officialExtensions = ["siderolabs/qemu-guest-agent"]
+        officialExtensions = [
+          "siderolabs/qemu-guest-agent",
+          "siderolabs/iscsi-tools",
+          "siderolabs/util-linux-tools",
+        ]
       }
     }
   })
@@ -70,6 +74,14 @@ resource "talos_machine_configuration_apply" "node" {
             validSubnets = ["192.168.57.0/24"]
           }
         }
+        # Mount the dedicated Longhorn disk at /var/lib/longhorn.
+        # Talos partitions and formats /dev/sdb (scsi1) on first boot.
+        disks = [{
+          device = "/dev/sdb"
+          partitions = [{
+            mountpoint = "/var/lib/longhorn"
+          }]
+        }]
         network = {
           interfaces = [{
             interface = "eth0"

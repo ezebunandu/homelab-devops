@@ -179,6 +179,18 @@ terraform init
 terraform apply
 ```
 
+## Upgrading nodes (Talos version or extensions change)
+
+When `talos.tf` schematic extensions or `talos_version` changes, run the upgrade script
+before `terraform apply`. It resolves the new schematic ID, downloads the updated image
+onto PVE, upgrades each node one at a time via `talosctl` (A/B atomic upgrade — no data
+loss), and verifies cluster health.
+
+```bash
+bash upgrade-nodes.sh
+terraform apply
+```
+
 ---
 
 ## Post-apply
@@ -204,7 +216,6 @@ blocks the gratuitous ARP the VIP-holding node broadcasts. `kubectl` is pointed 
 `192.168.57.20:6443` directly. The cluster itself is unaffected — internal traffic routes
 correctly.
 
-**Node INTERNAL-IP shows Cilium overlay addresses (10.x.x.x).** A
-`kubelet.nodeIP.validSubnets` patch is needed to pin the kubelet to the physical interface.
-This matters for Longhorn replication and `kubectl exec/logs`. Fix pending in next terraform
-apply.
+**Node INTERNAL-IP shows Cilium overlay addresses (10.x.x.x).** Fixed by adding
+`kubelet.nodeIP.validSubnets: [192.168.57.0/24]` to the machine config patch, which tells
+the kubelet to ignore Cilium's virtual interfaces when selecting its node IP.
