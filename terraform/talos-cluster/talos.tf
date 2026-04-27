@@ -62,6 +62,11 @@ resource "talos_machine_configuration_apply" "node" {
         # Cilium replaces kube-proxy — must be disabled before Cilium is installed
         network = { cni = { name = "none" } }
         proxy   = { disabled = true }
+        # Pin etcd peer URLs to the physical subnet so they survive reboots.
+        # Without this, Talos picks up Cilium overlay IPs (10.0.x.x) as peer
+        # addresses — those only exist after Cilium starts, causing etcd to fail
+        # health checks on every node reboot until Cilium is running again.
+        etcd = { advertisedSubnets = ["192.168.57.0/24"] }
       }
     }),
     # Per-node network: static IP + default route + Talos native L2 VIP.
