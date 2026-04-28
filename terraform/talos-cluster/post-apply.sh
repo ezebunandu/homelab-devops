@@ -24,3 +24,22 @@ helm upgrade --install cilium cilium/cilium \
 
 kubectl -n kube-system rollout status daemonset/cilium --timeout=5m
 kubectl get nodes -o wide
+
+# Install Longhorn distributed storage
+# Requires: iscsi-tools + util-linux-tools extensions in the Talos schematic (baked into the image)
+# and /dev/sdb partitioned + mounted at /var/lib/longhorn by the Talos machine config.
+echo ""
+echo "==> Installing Longhorn..."
+helm repo add longhorn https://charts.longhorn.io 2>/dev/null || true
+helm repo update
+
+helm upgrade --install longhorn longhorn/longhorn \
+  --namespace longhorn-system \
+  --create-namespace \
+  --wait \
+  --timeout 10m
+
+echo ""
+echo "==> Longhorn rollout status..."
+kubectl -n longhorn-system rollout status deploy/longhorn-driver-deployer --timeout=5m
+kubectl get pods -n longhorn-system
