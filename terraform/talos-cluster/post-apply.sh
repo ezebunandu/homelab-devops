@@ -25,6 +25,28 @@ helm upgrade --install cilium cilium/cilium \
 kubectl -n kube-system rollout status daemonset/cilium --timeout=5m
 kubectl get nodes -o wide
 
+# Install MetalLB — L2 LoadBalancer IP announcements for LAN services.
+# IP pool: 192.168.57.100-120 (excluded from Firewalla DHCP pool).
+# Traefik VM routes service hostnames to these IPs.
+echo ""
+echo "==> Installing MetalLB..."
+helm repo add metallb https://metallb.github.io/metallb 2>/dev/null || true
+helm repo update
+
+helm upgrade --install metallb metallb/metallb \
+  --namespace metallb-system \
+  --create-namespace \
+  --wait \
+  --timeout 5m
+
+# Wait for the webhook to be ready before applying CRs — the admission webhook
+# rejects IPAddressPool/L2Advertisement if the controller isn't serving yet.
+kubectl -n metallb-system wait --for=condition=Ready pod \
+  -l component=controller --timeout=2m
+
+kubectl apply -f metallb-config.yaml
+echo "    MetalLB pool: 192.168.57.100-192.168.57.120"
+
 # Install Longhorn distributed storage
 # Requires: iscsi-tools + util-linux-tools extensions in the Talos schematic (baked into the image)
 # and /dev/sdb partitioned + mounted at /var/lib/longhorn by the Talos machine config.
@@ -32,6 +54,15 @@ echo ""
 echo "==> Installing Longhorn..."
 helm repo add longhorn https://charts.longhorn.io 2>/dev/null || true
 helm repo update
+
+# Longhorn requires privileged pods (hostPath volumes, privileged containers).
+# Create namespace and label it before Helm install so PodSecurity admission
+# doesn't block the daemonset-controller from creating pods.
+kubectl create namespace longhorn-system --dry-run=client -o yaml | kubectl apply -f -
+kubectl label namespace longhorn-system \
+  pod-security.kubernetes.io/enforce=privileged \
+  pod-security.kubernetes.io/enforce-version=latest \
+  --overwrite
 
 helm upgrade --install longhorn longhorn/longhorn \
   --namespace longhorn-system \

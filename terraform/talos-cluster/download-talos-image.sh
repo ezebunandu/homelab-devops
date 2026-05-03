@@ -25,14 +25,17 @@
 # ---------
 # The schematic ID is a deterministic content hash. The same extension list always produces the
 # same ID — submitting it to the factory is idempotent. The ID below encodes:
-#   customization.systemExtensions.officialExtensions: [siderolabs/qemu-guest-agent]
+#   customization.systemExtensions.officialExtensions:
+#     - siderolabs/qemu-guest-agent   (Proxmox IP reporting + graceful shutdown)
+#     - siderolabs/iscsi-tools        (iscsid for Longhorn)
+#     - siderolabs/util-linux-tools   (nsenter for Longhorn system pod operations)
 #
-# If you need additional extensions (e.g. iscsi-tools for Longhorn), regenerate the schematic at
-# https://factory.talos.dev and update SCHEMATIC below. VERSION can be updated independently.
+# To regenerate the schematic (e.g. add extensions), post the YAML to factory.talos.dev and
+# update SCHEMATIC below. VERSION can be updated independently.
 
 set -euo pipefail
 
-SCHEMATIC="ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515"
+SCHEMATIC="53513e54bb39202f35694412577a6bc53d484744d35a126e5d42ef34785c0d83"
 VERSION="v1.12.6"
 DEST_DIR="/var/lib/vz/template/iso"
 FILENAME="talos-${SCHEMATIC}-${VERSION}.img"

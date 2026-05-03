@@ -116,6 +116,21 @@ kube-proxy is disabled (`cluster.proxy.disabled: true`) and Cilium is installed 
 
 The trade-off: Cilium must be installed before any ClusterIP service routing works.
 
+### Longhorn distributed storage
+
+Longhorn provides distributed block storage with 3-way replication across the three nodes. Each
+volume is replicated to all three nodes, so the cluster can survive a single-node failure without
+data loss.
+
+Longhorn requires two Talos extensions baked into the OS image (`iscsi-tools`, `util-linux-tools`)
+and a dedicated data disk on each node mounted at `/var/lib/longhorn`. Both are provisioned
+automatically — extensions via the Image Factory schematic, disk mount via the machine config patch.
+
+The `longhorn-system` namespace must be labelled `pod-security.kubernetes.io/enforce=privileged`
+before install. Longhorn's manager runs as a privileged container with `hostPath` volume mounts —
+Kubernetes's default `baseline` PodSecurity enforcement blocks it. `post-apply.sh` handles this
+before the Helm install.
+
 ### Disk layout
 
 Each node has two disks:
@@ -126,6 +141,21 @@ Each node has two disks:
 | scsi1  | local-lvm   | 200 GB | Longhorn replica data (spindle, bulk capacity) |
 
 The system disk can be wiped and reprovisioned without touching replica data. SSD is used for etcd because etcd is extremely sensitive to fsync latency.
+
+### etcd peer URL pinning
+
+By default, Talos selects a node's primary IP for etcd peer communication by picking the first
+non-loopback interface. When Cilium is the CNI, it creates virtual overlay interfaces
+(`10.0.x.x`) that may be elected over the physical interface — and those overlay addresses only
+exist after Cilium starts, which requires etcd to already be running.
+
+This chicken-and-egg dependency causes etcd to fail its health check on every node reboot: the
+node comes up, etcd starts, tries to reach peers via their Cilium overlay addresses, finds none
+of them present, and never achieves quorum. The cluster is unrecoverable without a full reset.
+
+Fixed by adding `cluster.etcd.advertisedSubnets: [192.168.57.0/24]` to the machine config,
+which forces etcd to advertise on the physical subnet regardless of what other interfaces are
+present.
 
 ---
 
@@ -156,8 +186,14 @@ Add these reservations in the Firewalla app before running `terraform apply`:
 The Proxmox provider's download resource has a known connectivity issue with the
 `query-url-metadata` API call, so the image is pre-downloaded manually. The script uses the
 Talos Image Factory (instead of GitHub releases) because it serves `.raw.zst` — the only
-compression format the provider accepts. It also bakes in the `qemu-guest-agent` extension
-via a schematic so Proxmox can report VM IPs and coordinate graceful shutdown.
+compression format the provider accepts. It bakes three extensions into the image via a
+schematic:
+
+| Extension | Purpose |
+|-----------|---------|
+| `siderolabs/qemu-guest-agent` | Proxmox IP reporting and graceful shutdown |
+| `siderolabs/iscsi-tools` | iscsid daemon required by Longhorn |
+| `siderolabs/util-linux-tools` | `nsenter` required by Longhorn system pods |
 
 ```bash
 # Run from your local machine — streams and executes on PVE directly
@@ -195,8 +231,8 @@ terraform apply
 
 ## Post-apply
 
-Writes kubeconfig, patches the server URL to bypass the blocked VIP, and installs Cilium
-with the Talos-specific capability and cgroup flags required.
+Writes kubeconfig, patches the server URL to bypass the blocked VIP, installs Cilium with the
+Talos-specific capability and cgroup flags required, then installs Longhorn.
 
 ```bash
 bash post-apply.sh
@@ -219,3 +255,7 @@ correctly.
 **Node INTERNAL-IP shows Cilium overlay addresses (10.x.x.x).** Fixed by adding
 `kubelet.nodeIP.validSubnets: [192.168.57.0/24]` to the machine config patch, which tells
 the kubelet to ignore Cilium's virtual interfaces when selecting its node IP.
+
+**etcd fails health check after node reboot.** Fixed by adding `cluster.etcd.advertisedSubnets:
+[192.168.57.0/24]` to the machine config. See the etcd peer URL pinning section above for the
+full explanation.

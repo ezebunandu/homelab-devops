@@ -1,5 +1,5 @@
-# Schematic posted to factory.talos.dev — includes qemu-guest-agent so Proxmox
-# can report VM IPs and coordinate graceful shutdown/snapshot.
+# Schematic posted to factory.talos.dev — bakes extensions into the OS image.
+# Extensions: qemu-guest-agent (Proxmox), iscsi-tools (Longhorn), util-linux-tools (Longhorn nsenter).
 # The returned ID is a deterministic content hash; same inputs → same ID.
 resource "talos_image_factory_schematic" "this" {
   schematic = yamlencode({
