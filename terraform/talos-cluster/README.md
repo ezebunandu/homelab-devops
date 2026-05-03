@@ -1,6 +1,7 @@
 # talos-cluster
 
-Terraform module that provisions a 3-node Talos Linux cluster on the devops Proxmox node.
+Terraform module that provisions a 6-node Talos Linux cluster (3 control plane + 3 workers)
+across a 3-node Proxmox cluster.
 
 ---
 
@@ -97,30 +98,74 @@ There is no sshd to patch, no bash to escape to, and no unnecessary kernel modul
 
 ## Cluster design
 
-### Compact control-plane-only topology
+### Infrastructure overview
 
-All three nodes are control plane nodes with `allowSchedulingOnControlPlanes: true`. There are no dedicated worker nodes. This is appropriate for a homelab where:
-- Resource efficiency matters — three nodes is the etcd quorum minimum
-- Workloads are not sensitive to control plane co-location
-- Simpler to manage — one node type, one config
+**Proxmox hosts:**
+
+| Host    | IP             | Hardware                          | vCPU | RAM     |
+|---------|----------------|-----------------------------------|------|---------|
+| devops  | 192.168.57.7   | Dell T3600 — primary API endpoint | 8    | 64 GB   |
+| devops2 | 192.168.57.9   |                                   | 4    | 15.5 GB |
+| devops3 | 192.168.57.10  | Intel i5-7500T                    | 4    | 15.5 GB |
+
+**Talos nodes (one CP + one Worker per Proxmox host):**
+
+| Node     | Type | Proxmox host | IP             | vCPU | RAM  | OS disk          | Data disk        | MAC               |
+|----------|------|--------------|----------------|------|------|------------------|------------------|-------------------|
+| talos-01 | CP   | devops       | 192.168.57.20  | 4    | 8 GB | 32 GB local-ssd  | 100 GB local-lvm | BC:24:11:6E:9D:82 |
+| talos-02 | CP   | devops2      | 192.168.57.21  | 2    | 8 GB | 32 GB local-lvm  | 100 GB local-lvm | BC:24:11:50:0D:8F |
+| talos-03 | CP   | devops3      | 192.168.57.22  | 2    | 8 GB | 32 GB local-lvm  | 100 GB local-lvm | BC:24:11:4B:C8:25 |
+| talos-04 | Worker | devops     | 192.168.57.23  | 2    | 8 GB | 32 GB local-ssd  | 200 GB local-lvm | BC:24:11:11:B2:75 |
+| talos-05 | Worker | devops2    | 192.168.57.24  | 2    | 7 GB | 32 GB local-lvm  | 200 GB local-lvm | BC:24:11:71:A9:6A |
+| talos-06 | Worker | devops3    | 192.168.57.25  | 2    | 7 GB | 32 GB local-lvm  | 200 GB local-lvm | BC:24:11:4A:EC:01 |
+
+**Proxmox storage pools:**
+
+| Host    | OS pool   | Data pool |
+|---------|-----------|-----------|
+| devops  | local-ssd | local-lvm |
+| devops2 | local-lvm | local-lvm |
+| devops3 | local-lvm | local-lvm |
+
+### Topology decisions
+
+`allowSchedulingOnControlPlanes: false` — all workloads are scheduled exclusively on the three
+worker nodes. The control plane nodes run etcd and the Kubernetes control plane components only.
+etcd quorum requires 2 of 3 CP nodes.
 
 ### Talos native L2 VIP
 
-Talos has built-in L2 VIP support in `networkd` — a floating IP that moves between nodes using gratuitous ARP based on etcd lease ownership. This achieves the same result as kube-vip without running an additional pod in the control plane.
+Talos has built-in L2 VIP support in `networkd` — a floating IP that moves between nodes using
+gratuitous ARP based on etcd lease ownership. This achieves the same result as kube-vip without
+running an additional pod in the control plane.
 
-The VIP (192.168.57.30) is currently blocked by Firewalla's ARP spoofing protection. See Known Issues.
+The VIP is 192.168.57.30. It is currently blocked by Firewalla's ARP spoofing protection — see
+Known Issues.
 
 ### Cilium with kube-proxy replacement
 
-kube-proxy is disabled (`cluster.proxy.disabled: true`) and Cilium is installed with `kubeProxyReplacement=true`. Cilium implements service routing using eBPF programs in the kernel rather than iptables rules, which is more efficient and provides better observability via Hubble.
+kube-proxy is disabled (`cluster.proxy.disabled: true`) and Cilium is installed with
+`kubeProxyReplacement=true`. Cilium implements service routing using eBPF programs in the kernel
+rather than iptables rules, which is more efficient and provides better observability via Hubble.
 
 The trade-off: Cilium must be installed before any ClusterIP service routing works.
 
+### MetalLB L2 load balancer
+
+MetalLB announces LoadBalancer service IPs over L2 (gratuitous ARP) from the L2 pool
+192.168.57.100–192.168.57.120. These IPs are excluded from the Firewalla DHCP pool.
+
+MetalLB speaker pods require privileged access. The `metallb-system` namespace is labelled
+`pod-security.kubernetes.io/enforce=privileged` by `post-apply.sh` before the Helm install.
+
+MetalLB L2 advertisements are also subject to the same Firewalla ARP spoofing issue as the VIP —
+see Known Issues.
+
 ### Longhorn distributed storage
 
-Longhorn provides distributed block storage with 3-way replication across the three nodes. Each
-volume is replicated to all three nodes, so the cluster can survive a single-node failure without
-data loss.
+Longhorn provides distributed block storage with replication across the worker nodes. Worker nodes
+have 200 GB data disks dedicated to replica storage. Control plane nodes carry a 100 GB data disk
+used only for the Longhorn CSI manager — they do not host replicas.
 
 Longhorn requires two Talos extensions baked into the OS image (`iscsi-tools`, `util-linux-tools`)
 and a dedicated data disk on each node mounted at `/var/lib/longhorn`. Both are provisioned
@@ -133,14 +178,16 @@ before the Helm install.
 
 ### Disk layout
 
-Each node has two disks:
+Control plane nodes and worker nodes have different data disk sizes:
 
-| Disk   | Datastore   | Size   | Purpose                        |
-|--------|-------------|--------|-------------------------------|
-| scsi0  | local-ssd   | 32 GB  | Talos OS + etcd (SSD for fsync latency) |
-| scsi1  | local-lvm   | 200 GB | Longhorn replica data (spindle, bulk capacity) |
+| Role    | Disk   | Size   | Purpose                                            |
+|---------|--------|--------|----------------------------------------------------|
+| All     | scsi0  | 32 GB  | Talos OS + etcd (SSD on devops for fsync latency)  |
+| CP      | scsi1  | 100 GB | Longhorn CSI manager only — no replica data        |
+| Worker  | scsi1  | 200 GB | Longhorn replica storage (bulk data capacity)      |
 
-The system disk can be wiped and reprovisioned without touching replica data. SSD is used for etcd because etcd is extremely sensitive to fsync latency.
+The system disk can be wiped and reprovisioned without touching the data disk. SSD is used for
+the OS disk on devops because etcd is extremely sensitive to fsync latency.
 
 ### etcd peer URL pinning
 
@@ -161,27 +208,12 @@ present.
 
 ## Pre-flight
 
-### 1. Set up SSH keys on the PVE node
+### 1. Register MAC→IP reservations in Firewalla
 
-The bpg/proxmox provider uses SSH for disk operations. Run once from the machine you'll apply from:
+The VMs have pinned MAC addresses so they always receive the same IPs on recreate. Add all six
+reservations in the Firewalla app before running `terraform apply` (see the node table above).
 
-```bash
-ssh-copy-id root@192.168.57.7
-eval $(ssh-agent) && ssh-add ~/.ssh/id_ed25519
-```
-
-### 2. Set DHCP reservations on Firewalla
-
-The VMs have pinned MAC addresses so they always get the same IPs on recreate.
-Add these reservations in the Firewalla app before running `terraform apply`:
-
-| Node     | MAC               | IP            |
-|----------|-------------------|---------------|
-| talos-01 | BC:24:11:6E:9D:82 | 192.168.57.20 |
-| talos-02 | BC:24:11:9F:9F:BC | 192.168.57.21 |
-| talos-03 | BC:24:11:D4:8C:AE | 192.168.57.22 |
-
-### 3. Download the Talos image onto the PVE node
+### 2. Download the Talos image onto each Proxmox host
 
 The Proxmox provider's download resource has a known connectivity issue with the
 `query-url-metadata` API call, so the image is pre-downloaded manually. The script uses the
@@ -195,25 +227,57 @@ schematic:
 | `siderolabs/iscsi-tools` | iscsid daemon required by Longhorn |
 | `siderolabs/util-linux-tools` | `nsenter` required by Longhorn system pods |
 
+Run the script once per Proxmox host, passing the hostname as an argument. The script SSHes to
+the target host and executes itself there:
+
 ```bash
-# Run from your local machine — streams and executes on PVE directly
-ssh root@192.168.57.7 bash < download-talos-image.sh
+./download-talos-image.sh devops
+./download-talos-image.sh devops2
+./download-talos-image.sh devops3
 ```
 
-The script is idempotent — it skips the download if the image already exists. To bump the
-Talos version, update `VERSION` in `download-talos-image.sh` and re-run. The schematic ID
-stays the same as long as the extension list doesn't change.
+The script is idempotent — it skips the download if the image already exists on that host. To
+bump the Talos version, update `VERSION` in `download-talos-image.sh` and re-run. The schematic
+ID stays the same as long as the extension list doesn't change.
+
+### 3. Load SSH key into agent
+
+The bpg/proxmox provider uses SSH for disk operations:
+
+```bash
+eval $(ssh-agent) && ssh-add ~/.ssh/id_ed25519
+```
 
 ---
 
 ## Apply
 
 ```bash
-cp terraform.tfvars.example terraform.tfvars
-cp .envrc.example .envrc   # fill in pve_api_token, then: direnv allow .
 terraform init
 terraform apply
+bash post-apply.sh
 ```
+
+`post-apply.sh` runs in order:
+
+1. Writes kubeconfig, patches server URL to `192.168.57.20:6443` (bypasses the blocked VIP)
+2. Installs Cilium (kube-proxy replacement, Talos-specific capability flags)
+3. Installs MetalLB, labels namespace privileged, applies IP pool CRs (`192.168.57.100–120`)
+4. Installs Longhorn, labels namespace privileged
+5. Installs ArgoCD with MetalLB IP `192.168.57.100` and insecure mode enabled, prints the initial admin password
+
+**ArgoCD Traefik route** — after `post-apply.sh` completes, copy the dynamic config to the Traefik VM to expose the UI at `https://argocd.lab.hezebonica.ca`:
+
+```bash
+scp terraform/traefik-vm/dynamic.d/30-k8s-argocd.yml \
+  sam@192.168.57.8:~/traefik/dynamic.d/30-k8s-argocd.yml
+```
+
+Traefik hot-reloads the file provider — no restart needed.
+
+> **ArgoCD Helm gotcha:** insecure mode must be set via `configs.params.server\.insecure=true`
+> (writes to `argocd-cmd-params-cm`), **not** `server.insecure=true` which is silently ignored
+> in chart v7+.
 
 ## Upgrading nodes (Talos version or extensions change)
 
@@ -229,33 +293,19 @@ terraform apply
 
 ---
 
-## Post-apply
-
-Writes kubeconfig, patches the server URL to bypass the blocked VIP, installs Cilium with the
-Talos-specific capability and cgroup flags required, then installs Longhorn.
-
-```bash
-bash post-apply.sh
-```
-
----
-
 ## Known issues
-
-**Node names are auto-generated** (e.g. `talos-sm9-jbn` instead of `talos-01`). Proxmox
-injects the VM name as an SMBIOS hostname on boot and Talos reads it, causing a conflict
-when a `machine.network.hostname` patch is also applied. The VM names in Proxmox are correct;
-the Kubernetes node names are just non-deterministic.
 
 **VIP (192.168.57.30) unreachable from client machines.** Firewalla's ARP spoofing protection
 blocks the gratuitous ARP the VIP-holding node broadcasts. `kubectl` is pointed at
-`192.168.57.20:6443` directly. The cluster itself is unaffected — internal traffic routes
-correctly.
+`192.168.57.20:6443` directly as a workaround. The cluster itself is unaffected — internal
+traffic routes correctly. Fix: disable ARP spoofing protection in Firewalla for the
+192.168.57.x segment.
 
-**Node INTERNAL-IP shows Cilium overlay addresses (10.x.x.x).** Fixed by adding
-`kubelet.nodeIP.validSubnets: [192.168.57.0/24]` to the machine config patch, which tells
-the kubelet to ignore Cilium's virtual interfaces when selecting its node IP.
+**MetalLB L2 advertisements blocked by Firewalla ARP spoofing.** Same root cause as the VIP
+issue — Firewalla drops gratuitous ARP from MetalLB speaker pods, so LoadBalancer IPs in the
+192.168.57.100–120 pool are unreachable from LAN clients. Fix: same as the VIP fix above.
 
-**etcd fails health check after node reboot.** Fixed by adding `cluster.etcd.advertisedSubnets:
-[192.168.57.0/24]` to the machine config. See the etcd peer URL pinning section above for the
-full explanation.
+**Node names are auto-generated** (e.g. `talos-2zx-qpc` instead of `talos-01`). Proxmox
+injects the VM name as an SMBIOS hostname on boot and Talos reads it, causing a conflict
+when a `machine.network.hostname` patch is also applied. The VM names in Proxmox are correct;
+the Kubernetes node names are non-deterministic.

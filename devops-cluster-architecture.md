@@ -15,14 +15,14 @@ Prereqs delivered by M1 (see [`README.md`](./README.md)):
 
 This doc is M2 — it assumes M1 is complete.
 
-## Decisions locked in (2026-04-20)
+## Decisions locked in (2026-04-20, updated 2026-05-03)
 
 | Decision | Choice | Rationale |
 |---|---|---|
-| Cluster topology | 3 compact nodes (control + worker combined) | Single physical host = single SPOF; CP/worker split buys nothing |
+| Cluster topology | 3CP + 3W across 3 Proxmox hosts | Spreads failure domains across 3 physical machines; dedicated workers free CPs for etcd |
 | Node OS | Talos Linux | Immutable, API-driven, minimal attack surface |
 | CNI | Cilium | NetworkPolicy + L7 observability + eBPF |
-| Kube API VIP | kube-vip (L2 mode) | Simpler than Cilium L2 announcements |
+| Kube API VIP | Talos native L2 VIP | Built-in to Talos; no extra static pod required |
 | Service LoadBalancer | MetalLB (L2 mode) | Works on any flat LAN |
 | Storage | Longhorn (3 replicas) | Distributed block, survives 1-node loss |
 | Ingress | Traefik VM stays as edge | Shared front door for k8s + non-k8s services |
@@ -37,39 +37,61 @@ This doc is M2 — it assumes M1 is complete.
 ## Cluster topology
 
 ```
-Proxmox: devops (192.168.57.7)
-├── traefik        192.168.57.8         edge proxy (existing VM)
-├── talos-01       192.168.57.20        control + worker
-├── talos-02       192.168.57.21        control + worker
-├── talos-03       192.168.57.22        control + worker
-└── kube API VIP   192.168.57.30        floating (kube-vip, L2)
+Proxmox cluster (devops-cluster)
+├── devops    (192.168.57.7)   Dell T3600, 8 vCPU, 64 GB
+│   ├── traefik   192.168.57.8    edge proxy
+│   ├── talos-01  192.168.57.20   control plane
+│   └── talos-04  192.168.57.23   worker
+├── devops2   (192.168.57.9)   4 vCPU, 15.5 GB
+│   ├── talos-02  192.168.57.21   control plane
+│   └── talos-05  192.168.57.24   worker
+└── devops3   (192.168.57.10)  4 vCPU, 15.5 GB
+    ├── talos-03  192.168.57.22   control plane
+    └── talos-06  192.168.57.25   worker
+
+kube API VIP   192.168.57.30   Talos L2 VIP (floats across CPs)
 ```
 
-`kubectl` targets `https://192.168.57.30:6443` — doesn't care which CP node is up.
+`kubectl` targets `https://192.168.57.30:6443` — doesn't care which CP node is up. VIP is currently blocked by Firewalla so `kubectl` points at `192.168.57.20` directly in the interim.
 
 ## Node specs
 
-Per Talos VM:
+**Control plane nodes (talos-01/02/03):**
 
-| Resource | Value |
-|---|---|
-| vCPU | 4 (host passthrough) |
-| RAM | 16 GB |
-| Root disk | 32 GB (scsi0) — Talos system |
-| Data disk | 200 GB (scsi1) — Longhorn replica |
-| Network | single NIC on `vmbr0`, static IP |
-| Firmware | SeaBIOS |
-| Machine type | q35 |
-| SCSI controller | virtio-scsi-single |
+| Resource | talos-01 | talos-02 / talos-03 |
+|---|---|---|
+| vCPU | 4 | 2 |
+| RAM | 8 GB | 8 GB |
+| Root disk | 32 GB (scsi0) — Talos system | 32 GB (scsi0) — Talos system |
+| Data disk | 100 GB (scsi1) — Longhorn replica | 100 GB (scsi1) — Longhorn replica |
+| Network | single NIC on `vmbr0`, static IP | single NIC on `vmbr0`, static IP |
+| Firmware | SeaBIOS | SeaBIOS |
+| Machine type | q35 | q35 |
+| SCSI controller | virtio-scsi-single | virtio-scsi-single |
 
-Totals: 12 vCPU, 48 GB RAM, ~700 GB storage committed to k8s. Leaves ~300 GB on the T3600 for Proxmox, Traefik VM, ISOs, snapshots.
+`allowSchedulingOnControlPlanes: false` — no workloads run on CP nodes.
+
+**Worker nodes (talos-04/05/06):**
+
+| Resource | talos-04 | talos-05 / talos-06 |
+|---|---|---|
+| vCPU | 2 | 2 |
+| RAM | 8 GB | 7 GB |
+| Root disk | 32 GB (scsi0) — Talos system | 32 GB (scsi0) — Talos system |
+| Data disk | 200 GB (scsi1) — Longhorn replica | 200 GB (scsi1) — Longhorn replica |
+| Network | single NIC on `vmbr0`, static IP | single NIC on `vmbr0`, static IP |
+| Firmware | SeaBIOS | SeaBIOS |
+| Machine type | q35 | q35 |
+| SCSI controller | virtio-scsi-single | virtio-scsi-single |
+
+Cluster totals: 16 vCPU, 47 GB RAM, ~1.4 TB storage committed to k8s.
 
 ## Network layout
 
 | Range | Purpose |
 |---|---|
 | `192.168.57.0/24` | Existing LAN; all VMs here |
-| `192.168.57.30` | kube API VIP (kube-vip managed) |
+| `192.168.57.30` | kube API VIP (Talos native L2 VIP) |
 | `192.168.57.100–.120` | MetalLB L2 pool (21 LoadBalancer IPs) |
 | `10.42.0.0/16` | Pod CIDR (Cilium default) |
 | `10.43.0.0/16` | Service CIDR (Cilium default) |
@@ -91,7 +113,7 @@ Production cluster on a different subnet — no CIDR collisions. Inter-subnet ro
 ## Stack + namespace layout
 
 ```
-kube-system        cilium, coredns, kube-vip, metrics-server
+kube-system        cilium, coredns, metrics-server
 metallb-system     metallb
 longhorn-system    longhorn
 argocd             argocd (syncs everything below)
@@ -120,7 +142,7 @@ gitlab-runners     gitlab-runner (k8s executor, spawns per-job pods)
 | GitLab Runner (idle) | 1 GB |
 | Overhead / burst | 5 GB |
 | **Committed** | **~31 GB** |
-| **Cluster budget (48 GB)** | ~17 GB headroom |
+| **Cluster budget (47 GB)** | ~16 GB headroom |
 
 ## Edge integration — Traefik VM stays
 
@@ -362,21 +384,17 @@ Automated MRs for every pinned version across the homelab: Helm chart `targetRev
 
 Imperative bootstrap (Terraform + CLI), then GitOps takes over.
 
-1. **Provision 3 Talos VMs on Proxmox** — new Terraform module `terraform/talos-cluster/`, parallel to `terraform/traefik-vm/`
-2. **Generate Talos machine configs** — `talosctl gen config` with kube-vip static pod baked in
-3. **Apply machine configs** — `talosctl apply-config` to each node
-4. **Bootstrap etcd** — `talosctl bootstrap` on first control-plane node
-5. **Pull kubeconfig** — `talosctl kubeconfig`; verify `kubectl get nodes`
-6. **Install Cilium** — CLI or initial Helm install (networking before anything else)
-7. **Install ArgoCD** — one-time Helm install
-8. **`tk apply clusters/devops`** — creates all Application CRDs
-9. **ArgoCD reconciles** — MetalLB → Longhorn → cert-manager → external-secrets → Vault (manual unseal) → Harbor → GitLab → runners → Alloy
-10. **Configure Vault** — enable k8s auth, create policies, wire external-secrets
-11. **Bootstrap GitLab** — root password, homelab group, gitops repo
-12. **Add edge Traefik routes** — one file-provider entry per service
-13. **Configure Renovate** — scheduled pipeline + `renovate.json` in the gitops repo; group-scoped GitLab token in Vault; see "Dependency automation — Renovate"
+1. ✅ **Provision 6 Talos VMs across 3 Proxmox hosts** — `terraform apply` in `terraform/talos-cluster/`
+2. ✅ **Apply machine configs + bootstrap etcd** — handled by `terraform apply` via the Talos provider
+3. ✅ **Install Cilium, MetalLB, Longhorn, ArgoCD** — `bash post-apply.sh`; ArgoCD exposed at `https://argocd.lab.hezebonica.ca` via MetalLB IP `192.168.57.100` + Traefik file-provider route
+4. **`tk apply clusters/devops`** — creates all Application CRDs
+5. **ArgoCD reconciles** — cert-manager → external-secrets → Vault (manual unseal) → Harbor → GitLab → runners → Alloy
+6. **Configure Vault** — enable k8s auth, create policies, wire external-secrets
+7. **Bootstrap GitLab** — root password, homelab group, gitops repo
+8. **Add remaining Traefik routes** — one file-provider entry per service (vault, harbor, gitlab, etc.)
+9. **Configure Renovate** — scheduled pipeline + `renovate.json` in the gitops repo; group-scoped GitLab token in Vault
 
-Steps 1–8 are one-shot. Step 9 is hands-off (watch ArgoCD sync). Steps 10–13 are platform config.
+Steps 1–3 are complete. Step 4 onward is next.
 
 ## Open questions / future work
 

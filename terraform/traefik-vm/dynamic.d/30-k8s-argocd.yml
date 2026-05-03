@@ -1,0 +1,14 @@
+http:
+  routers:
+    argocd:
+      rule: "Host(`argocd.lab.hezebonica.ca`)"
+      entryPoints: [websecure]
+      service: argocd
+      tls:
+        certResolver: cloudflare
+
+  services:
+    argocd:
+      loadBalancer:
+        servers:
+          - url: "http://192.168.57.100"

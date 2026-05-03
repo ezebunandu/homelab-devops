@@ -15,7 +15,7 @@ Rebuilding a home Proxmox host into a self-hosted DevOps platform: real TLS on e
 
 | Variable | Value | Notes |
 |---|---|---|
-| Proxmox node | `devops` @ `192.168.57.7` | Dell T3600, PVE 9.1.1 |
+| Proxmox cluster | `devops-cluster` (`devops`/`devops2`/`devops3`) | Dell T3600 + 2× Intel i5-7500T, PVE 9.1 |
 | LAN | `192.168.57.0/24` | Flat LAN, no VLANs |
 | Public domain | `hezebonica.ca` | Registered with Cloudflare Registrar |
 | Internal subdomain | `lab.hezebonica.ca` | All LAN services live here |
@@ -38,7 +38,7 @@ Home LAN (192.168.57.0/24)
     ├─► Proxmox UI
     ├─► services on the Traefik VM itself (labeled Docker)
     └─► DevOps k8s cluster via MetalLB IPs (future)
-          └── talos-01..03 @ 192.168.57.20..22, kube API VIP @ .30
+          └── talos-01..06 @ 192.168.57.20..25 (3CP+3W across 3 PVE hosts), VIP @ .30
 ```
 
 ## Milestones
@@ -52,7 +52,7 @@ Wildcard Let's Encrypt cert at the edge Traefik VM, split-horizon DNS via Pi-hol
 
 ### M2 — DevOps Kubernetes cluster (next)
 
-3-node Talos cluster on the same Proxmox host, hosting GitLab, Vault, Harbor, ArgoCD, Grafana Alloy, and Renovate (scheduled pipeline for automated dependency updates).
+6-node Talos cluster (3CP+3W) across a 3-node Proxmox cluster, hosting GitLab, Vault, Harbor, ArgoCD, Grafana Alloy, and Renovate (scheduled pipeline for automated dependency updates).
 
 Design: [`devops-cluster-architecture.md`](./devops-cluster-architecture.md).
 
@@ -61,9 +61,9 @@ Sub-milestones:
 **Pre-requisite (before DC-3):**
 - [ ] Shrink Firewalla DHCP pool to exclude MetalLB's `192.168.57.100–.120` range (or reserve that block as static). Prevents DHCP leases colliding with LoadBalancer IPs.
 
-- [ ] **DC-1** — Terraform module for 3 Talos VMs (`terraform/talos-cluster/`)
-- [ ] **DC-2** — Talos machine configs + kube-vip API VIP at `192.168.57.30`
-- [ ] **DC-3** — Install Cilium, MetalLB, Longhorn, ArgoCD (imperative bootstrap)
+- [x] **DC-1** — Terraform module for 6 Talos VMs across 3 Proxmox hosts (`terraform/talos-cluster/`)
+- [x] **DC-2** — Talos machine configs + Talos native L2 VIP at `192.168.57.30`
+- [x] **DC-3** — Install Cilium, MetalLB, Longhorn, ArgoCD (imperative bootstrap)
 - [ ] **DC-4** — GitOps repo scaffold (tanka + jsonnet + argocd-app helper)
 - [ ] **DC-5** — Deploy Vault → unseal → wire external-secrets backend
 - [ ] **DC-6** — Deploy Harbor, GitLab, GitLab Runners
@@ -91,7 +91,8 @@ homelab-devops/
 ├── tls-everywhere-runbook.md        M1 bring-up procedure
 ├── devops-cluster-architecture.md   M2 design
 ├── terraform/
-│   └── traefik-vm/                  M1 — edge VM (bpg/proxmox)
+│   ├── traefik-vm/                  M1 — edge VM (bpg/proxmox)
+│   └── talos-cluster/               M2 — 6-node Talos cluster (3CP+3W)
 └── scripts/
     ├── proxmox-setup.sh             PVE-side prep for Terraform
     ├── pihole-wildcard.sh           split-horizon DNS record

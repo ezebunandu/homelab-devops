@@ -33,9 +33,14 @@ echo "==> Installing MetalLB..."
 helm repo add metallb https://metallb.github.io/metallb 2>/dev/null || true
 helm repo update
 
+kubectl create namespace metallb-system --dry-run=client -o yaml | kubectl apply -f -
+kubectl label namespace metallb-system \
+  pod-security.kubernetes.io/enforce=privileged \
+  pod-security.kubernetes.io/enforce-version=latest \
+  --overwrite
+
 helm upgrade --install metallb metallb/metallb \
   --namespace metallb-system \
-  --create-namespace \
   --wait \
   --timeout 5m
 
@@ -74,3 +79,30 @@ echo ""
 echo "==> Longhorn rollout status..."
 kubectl -n longhorn-system rollout status deploy/longhorn-driver-deployer --timeout=5m
 kubectl get pods -n longhorn-system
+
+# Install ArgoCD — GitOps controller. App-of-apps bootstraps all platform services.
+echo ""
+echo "==> Installing ArgoCD..."
+helm repo add argo https://argoproj.github.io/argo-helm 2>/dev/null || true
+helm repo update
+
+kubectl create namespace argocd --dry-run=client -o yaml | kubectl apply -f -
+
+helm upgrade --install argocd argo/argo-cd \
+  --namespace argocd \
+  --wait \
+  --timeout 5m \
+  --set 'configs.params.server\.insecure=true' \
+  --set server.service.type=LoadBalancer \
+  --set 'server.service.annotations.metallb\.io/loadBalancerIPs=192.168.57.100'
+
+kubectl -n argocd rollout status deploy/argocd-server --timeout=3m
+
+echo ""
+echo "==> ArgoCD ready."
+echo "    Initial admin password:"
+kubectl -n argocd get secret argocd-initial-admin-secret \
+  -o jsonpath='{.data.password}' | base64 -d
+echo ""
+echo "    UI: https://argocd.lab.hezebonica.ca (once Traefik route is in place)"
+echo "    Or locally: kubectl port-forward svc/argocd-server -n argocd 8080:80"
