@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
-# download-talos-image.sh
+# download-talos-image.sh [PVE_NODE]
 #
-# Downloads the Talos Linux disk image from the Image Factory onto the Proxmox host.
-# Must be run directly on the PVE node (or via `ssh root@<pve-ip> bash < download-talos-image.sh`).
+# Downloads the Talos Linux disk image from the Image Factory onto a Proxmox host.
+# When PVE_NODE is given (e.g. "devops2"), the script SSHes to root@<PVE_NODE> and
+# runs itself there. When called without arguments it runs locally (i.e. on the PVE
+# node itself).
 #
 # WHY THIS EXISTS
 # ---------------
@@ -35,6 +37,12 @@
 
 set -euo pipefail
 
+# ── remote dispatch ─────────────────────────────────────────────────────────────
+if [[ -n "${1:-}" ]]; then
+  ssh "root@${1}" 'bash -s' < "$0"
+  exit $?
+fi
+
 SCHEMATIC="53513e54bb39202f35694412577a6bc53d484744d35a126e5d42ef34785c0d83"
 VERSION="v1.12.6"
 DEST_DIR="/var/lib/vz/template/iso"
@@ -54,6 +62,8 @@ if [[ -f "$DEST" ]]; then
   echo "Delete the file and re-run to force a fresh download."
   exit 0
 fi
+
+mkdir -p "${DEST_DIR}"
 
 # ── download and decompress ─────────────────────────────────────────────────────
 echo "Downloading Talos ${VERSION} (schematic: ${SCHEMATIC:0:12}…)"
