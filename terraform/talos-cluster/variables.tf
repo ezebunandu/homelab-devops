@@ -15,11 +15,6 @@ variable "pve_insecure_tls" {
   default = true
 }
 
-variable "pve_node" {
-  type    = string
-  default = "devops"
-}
-
 variable "cluster_name" {
   type        = string
   default     = "devops"
@@ -55,15 +50,35 @@ variable "kubernetes_version" {
   description = "Kubernetes version to install. Must be supported by the chosen Talos version."
 }
 
-variable "nodes" {
+variable "hosts" {
   type = map(object({
-    ip  = string
-    mac = string
+    os_pool   = string
+    data_pool = string
   }))
   default = {
-    talos-01 = { ip = "192.168.57.20", mac = "BC:24:11:6E:9D:82" }
-    talos-02 = { ip = "192.168.57.21", mac = "BC:24:11:9F:9F:BC" }
-    talos-03 = { ip = "192.168.57.22", mac = "BC:24:11:D4:8C:AE" }
+    devops  = { os_pool = "local-ssd", data_pool = "local-lvm" }
+    devops2 = { os_pool = "local-lvm", data_pool = "local-lvm" }
+    devops3 = { os_pool = "local-lvm", data_pool = "local-lvm" }
   }
-  description = "Map of node names to their static IPs and pinned MAC addresses."
+  description = "Per-host storage pool names. os_pool for root disk, data_pool for Longhorn disk."
+}
+
+variable "nodes" {
+  type = map(object({
+    ip           = string
+    mac          = optional(string, null)
+    host         = string
+    machine_type = string
+    vcpu         = number
+    mem          = number
+  }))
+  default = {
+    talos-01 = { ip = "192.168.57.20", mac = "BC:24:11:6E:9D:82", host = "devops",  machine_type = "controlplane", vcpu = 4, mem = 8192 }
+    talos-02 = { ip = "192.168.57.21", mac = null,                 host = "devops2", machine_type = "controlplane", vcpu = 2, mem = 8192 }
+    talos-03 = { ip = "192.168.57.22", mac = null,                 host = "devops3", machine_type = "controlplane", vcpu = 2, mem = 8192 }
+    talos-04 = { ip = "192.168.57.23", mac = null,                 host = "devops",  machine_type = "worker",       vcpu = 2, mem = 8192 }
+    talos-05 = { ip = "192.168.57.24", mac = null,                 host = "devops2", machine_type = "worker",       vcpu = 2, mem = 7168 }
+    talos-06 = { ip = "192.168.57.25", mac = null,                 host = "devops3", machine_type = "worker",       vcpu = 2, mem = 7168 }
+  }
+  description = "All cluster nodes. Fill in real MACs after first apply for Firewalla consistency."
 }

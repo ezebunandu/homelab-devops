@@ -16,7 +16,6 @@ resource "talos_image_factory_schematic" "this" {
 }
 
 # Resolves download URLs for the schematic + version combination.
-# urls.disk_image → metal-amd64.raw.zst (raw disk, zstd-compressed)
 data "talos_image_factory_urls" "this" {
   talos_version = var.talos_version
   schematic_id  = talos_image_factory_schematic.this.id
@@ -32,11 +31,11 @@ resource "talos_machine_secrets" "cluster" {}
 data "talos_client_configuration" "this" {
   cluster_name         = var.cluster_name
   client_configuration = talos_machine_secrets.cluster.client_configuration
-  endpoints            = [for name, node in var.nodes : node.ip]
+  endpoints            = [for name, node in var.nodes : node.ip if node.machine_type == "controlplane"]
   nodes                = [for name, node in var.nodes : node.ip]
 }
 
-# Base control plane machine configuration (rendered once, patched per-node).
+# Base control plane machine configuration.
 data "talos_machine_configuration" "controlplane" {
   cluster_name       = var.cluster_name
   cluster_endpoint   = var.cluster_endpoint
@@ -46,71 +45,74 @@ data "talos_machine_configuration" "controlplane" {
   talos_version      = var.talos_version
 }
 
+# Base worker machine configuration.
+data "talos_machine_configuration" "worker" {
+  cluster_name       = var.cluster_name
+  cluster_endpoint   = var.cluster_endpoint
+  machine_type       = "worker"
+  machine_secrets    = talos_machine_secrets.cluster.machine_secrets
+  kubernetes_version = var.kubernetes_version
+  talos_version      = var.talos_version
+}
+
 # Apply config to each node with per-node patches merged on top.
 resource "talos_machine_configuration_apply" "node" {
   for_each = var.nodes
 
-  client_configuration        = talos_machine_secrets.cluster.client_configuration
-  machine_configuration_input = data.talos_machine_configuration.controlplane.machine_configuration
-  node                        = each.value.ip
+  client_configuration = talos_machine_secrets.cluster.client_configuration
+  machine_configuration_input = (
+    each.value.machine_type == "controlplane"
+    ? data.talos_machine_configuration.controlplane.machine_configuration
+    : data.talos_machine_configuration.worker.machine_configuration
+  )
+  node = each.value.ip
 
-  config_patches = [
-    # Compact cluster: allow workloads on control plane nodes
-    yamlencode({
+  config_patches = concat(
+    # Cluster-level patch: control planes only
+    each.value.machine_type == "controlplane" ? [yamlencode({
       cluster = {
-        allowSchedulingOnControlPlanes = true
-        # Cilium replaces kube-proxy — must be disabled before Cilium is installed
+        allowSchedulingOnControlPlanes = false
         network = { cni = { name = "none" } }
         proxy   = { disabled = true }
         # Pin etcd peer URLs to the physical subnet so they survive reboots.
-        # Without this, Talos picks up Cilium overlay IPs (10.0.x.x) as peer
-        # addresses — those only exist after Cilium starts, causing etcd to fail
-        # health checks on every node reboot until Cilium is running again.
         etcd = { advertisedSubnets = ["192.168.57.0/24"] }
       }
-    }),
-    # Per-node network: static IP + default route + Talos native L2 VIP.
-    # The VIP (192.168.57.30) floats to whichever control-plane node holds
-    # the etcd lease — no kube-vip pod required.
-    yamlencode({
+    })] : [],
+
+    # Per-node patch: all nodes
+    [yamlencode({
       machine = {
         kubelet = {
-          nodeIP = {
-            validSubnets = ["192.168.57.0/24"]
-          }
+          nodeIP = { validSubnets = ["192.168.57.0/24"] }
         }
-        # Mount the dedicated Longhorn disk at /var/lib/longhorn.
-        # Talos partitions and formats /dev/sdb (scsi1) on first boot.
         disks = [{
-          device = "/dev/sdb"
-          partitions = [{
-            mountpoint = "/var/lib/longhorn"
-          }]
+          device     = "/dev/sdb"
+          partitions = [{ mountpoint = "/var/lib/longhorn" }]
         }]
         network = {
-          interfaces = [{
-            interface = "eth0"
-            addresses = ["${each.value.ip}/24"]
-            routes = [{
-              network = "0.0.0.0/0"
-              gateway = var.gateway
-            }]
-            vip = { ip = var.cluster_vip }
-          }]
+          interfaces = [merge(
+            {
+              interface = "eth0"
+              addresses = ["${each.value.ip}/24"]
+              routes    = [{ network = "0.0.0.0/0", gateway = var.gateway }]
+            },
+            # VIP floats across control plane nodes only
+            each.value.machine_type == "controlplane" ? { vip = { ip = var.cluster_vip } } : {}
+          )]
           nameservers = ["1.1.1.1", "8.8.8.8"]
         }
       }
-    }),
-  ]
+    })]
+  )
 
   depends_on = [proxmox_virtual_environment_vm.talos]
 }
 
 # Bootstrap etcd on the first control plane node.
-# Only runs once — etcd joins the cluster on its own after this point.
+# Only runs once — other CPs join automatically.
 resource "talos_machine_bootstrap" "cluster" {
   client_configuration = talos_machine_secrets.cluster.client_configuration
-  node                 = values(var.nodes)[0].ip
+  node                 = [for name, node in var.nodes : node.ip if node.machine_type == "controlplane"][0]
 
   depends_on = [talos_machine_configuration_apply.node]
 }
@@ -118,7 +120,7 @@ resource "talos_machine_bootstrap" "cluster" {
 # Retrieve kubeconfig once the cluster is up.
 resource "talos_cluster_kubeconfig" "cluster" {
   client_configuration = talos_machine_secrets.cluster.client_configuration
-  node                 = values(var.nodes)[0].ip
+  node                 = [for name, node in var.nodes : node.ip if node.machine_type == "controlplane"][0]
 
   depends_on = [talos_machine_bootstrap.cluster]
 }

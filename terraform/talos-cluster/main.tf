@@ -1,11 +1,8 @@
-# Download the Talos disk image from the Image Factory (metal-amd64.raw.zst).
-# The schematic ID encodes the qemu-guest-agent extension — same ID every time
-# the same schematic is submitted, so this download is fully reproducible.
 resource "proxmox_virtual_environment_vm" "talos" {
   for_each = var.nodes
 
   name      = each.key
-  node_name = var.pve_node
+  node_name = each.value.host
   tags      = ["homelab", "talos", "terraform", "k8s"]
 
   machine       = "q35"
@@ -17,18 +14,17 @@ resource "proxmox_virtual_environment_vm" "talos" {
   }
 
   cpu {
-    cores = 4
+    cores = each.value.vcpu
     type  = "host"
   }
 
   memory {
-    dedicated = 16384
+    dedicated = each.value.mem
   }
 
-  # scsi0 — Talos system disk on the SSD thin pool (fast etcd fsyncs).
-  # Cloned from the factory image; boots directly into Talos maintenance mode.
+  # scsi0 — Talos system disk. Uses the SSD pool on devops, lvm pool on devops2/devops3.
   disk {
-    datastore_id = "local-ssd"
+    datastore_id = var.hosts[each.value.host].os_pool
     file_id      = "local:iso/talos-${talos_image_factory_schematic.this.id}-${var.talos_version}.img"
     interface    = "scsi0"
     size         = 32
@@ -36,12 +32,12 @@ resource "proxmox_virtual_environment_vm" "talos" {
     ssd          = true
   }
 
-  # scsi1 — Longhorn replica disk on the spindle thin pool (bulk capacity)
+  # scsi1 — Longhorn replica disk. Workers get 200 GB, control planes get 100 GB (CSI only).
   disk {
-    datastore_id = "local-lvm"
+    datastore_id = var.hosts[each.value.host].data_pool
     file_format  = "raw"
     interface    = "scsi1"
-    size         = 200
+    size         = each.value.machine_type == "controlplane" ? 100 : 200
     discard      = "on"
   }
 
