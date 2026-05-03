@@ -74,11 +74,11 @@ variable "nodes" {
   }))
   default = {
     talos-01 = { ip = "192.168.57.20", mac = "BC:24:11:6E:9D:82", host = "devops",  machine_type = "controlplane", vcpu = 4, mem = 8192 }
-    talos-02 = { ip = "192.168.57.21", mac = null,                 host = "devops2", machine_type = "controlplane", vcpu = 2, mem = 8192 }
-    talos-03 = { ip = "192.168.57.22", mac = null,                 host = "devops3", machine_type = "controlplane", vcpu = 2, mem = 8192 }
-    talos-04 = { ip = "192.168.57.23", mac = null,                 host = "devops",  machine_type = "worker",       vcpu = 2, mem = 8192 }
-    talos-05 = { ip = "192.168.57.24", mac = null,                 host = "devops2", machine_type = "worker",       vcpu = 2, mem = 7168 }
-    talos-06 = { ip = "192.168.57.25", mac = null,                 host = "devops3", machine_type = "worker",       vcpu = 2, mem = 7168 }
+    talos-02 = { ip = "192.168.57.21", mac = "BC:24:11:50:0D:8F", host = "devops2", machine_type = "controlplane", vcpu = 2, mem = 8192 }
+    talos-03 = { ip = "192.168.57.22", mac = "BC:24:11:4B:C8:25", host = "devops3", machine_type = "controlplane", vcpu = 2, mem = 8192 }
+    talos-04 = { ip = "192.168.57.23", mac = "BC:24:11:11:B2:75", host = "devops",  machine_type = "worker",       vcpu = 2, mem = 8192 }
+    talos-05 = { ip = "192.168.57.24", mac = "BC:24:11:71:A9:6A", host = "devops2", machine_type = "worker",       vcpu = 2, mem = 7168 }
+    talos-06 = { ip = "192.168.57.25", mac = "BC:24:11:4A:EC:01", host = "devops3", machine_type = "worker",       vcpu = 2, mem = 7168 }
   }
   description = "All cluster nodes. Fill in real MACs after first apply for Firewalla consistency."
 }
