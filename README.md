@@ -37,7 +37,7 @@ Home LAN (192.168.57.0/24)
     │
     ├─► Proxmox UI
     ├─► services on the Traefik VM itself (labeled Docker)
-    └─► DevOps k8s cluster via MetalLB IPs (future)
+    └─► DevOps k8s cluster via MetalLB IPs (192.168.57.100–.120)
           └── talos-01..06 @ 192.168.57.20..25 (3CP+3W across 3 PVE hosts), VIP @ .30
 ```
 
@@ -64,8 +64,8 @@ Sub-milestones:
 - [x] **DC-1** — Terraform module for 6 Talos VMs across 3 Proxmox hosts (`terraform/talos-cluster/`)
 - [x] **DC-2** — Talos machine configs + Talos native L2 VIP at `192.168.57.30`
 - [x] **DC-3** — Install Cilium, MetalLB, Longhorn, ArgoCD (imperative bootstrap)
-- [ ] **DC-4** — GitOps repo scaffold (tanka + jsonnet + argocd-app helper)
-- [ ] **DC-5** — Deploy Vault → unseal → wire external-secrets backend
+- [x] **DC-4** — GitOps repo scaffold (`homelab-platform` on GitHub, app-of-apps in ArgoCD)
+- [x] **DC-5** — Deploy Vault → unseal → wire external-secrets backend
 - [ ] **DC-6** — Deploy Harbor, GitLab, GitLab Runners
 - [ ] **DC-7** — Deploy Grafana Alloy; verify telemetry reaches Grafana Cloud
 - [ ] **DC-8** — Add edge Traefik routes for each service (gitlab, harbor, vault, argocd)

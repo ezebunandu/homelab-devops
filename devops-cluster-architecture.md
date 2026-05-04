@@ -103,8 +103,8 @@ Production cluster on a different subnet — no CIDR collisions. Inter-subnet ro
 | Service | IP |
 |---|---|
 | ArgoCD | 192.168.57.100 |
-| GitLab | 192.168.57.101 |
-| Harbor | 192.168.57.102 |
+| Harbor | 192.168.57.101 |
+| GitLab | 192.168.57.102 |
 | Vault | 192.168.57.103 |
 | (reserved) | 192.168.57.104–.120 |
 
@@ -185,144 +185,50 @@ Three explicit coupling points:
 
 No direct cluster-to-cluster API access beyond HTTPS to Harbor + Vault.
 
-## Deployment model — Jsonnet + Helm
+## Deployment model — YAML values + Helm (Jsonnet deferred)
 
 Two paths, chosen per component:
 
 | Component | Tool | Reason |
 |---|---|---|
-| Vendor charts (GitLab, Harbor, Vault, Longhorn, MetalLB, Cilium, ArgoCD, cert-manager) | Helm via ArgoCD `source.chart` | Don't re-author vendor charts |
-| Grafana Alloy config, per-env tweaks, your apps, home-automation workloads | Tanka environments (jsonnet) | Real templating where it pays |
+| Vendor charts (GitLab, Harbor, Vault, Longhorn, MetalLB, Cilium, ArgoCD, cert-manager) | Helm via ArgoCD multi-source (`source.chart` + values overlay from `homelab-platform` repo) | Don't re-author vendor charts |
+| Grafana Alloy config, per-env tweaks, home-automation workloads | Tanka environments (jsonnet) — deferred until first-party workloads exist | Real templating where it pays |
 
-Helm values are jsonnet objects passed through ArgoCD's `valuesObject` — no YAML values files anywhere.
+Platform services use YAML values files in `homelab-platform/apps/<service>/values.yaml`, referenced via ArgoCD's multi-source `$values` ref. Tanka will be introduced when first-party workloads (Alloy config, GitLab Runner) need real templating.
 
 ## GitOps repo structure
 
+`homelab-platform` (private GitHub repo, moves to self-hosted GitLab after DC-6):
+
 ```
-gitops/
-├── clusters/                       Tanka envs that render ArgoCD Applications
-│   ├── devops/
-│   │   ├── main.jsonnet            app-of-apps for devops cluster
-│   │   └── spec.json
-│   └── prod/
-│       ├── main.jsonnet
-│       └── spec.json
-├── environments/                   Tanka envs for first-party workloads
-│   ├── devops/
-│   │   ├── main.jsonnet
-│   │   └── spec.json
-│   └── prod/
-│       ├── main.jsonnet
-│       └── spec.json
-├── lib/                            first-party libraries
-│   ├── argocd-app.libsonnet
-│   ├── alloy.libsonnet
-│   ├── gitlab-runner.libsonnet
-│   └── defaults.libsonnet
-├── vendor/                         jsonnet-bundler managed
-│   └── k8s-libsonnet/
-├── jsonnetfile.json
-└── jsonnetfile.lock.json
+homelab-platform/
+├── argocd/
+│   ├── projects/
+│   │   └── platform.yaml          ArgoCD Project scoping the platform namespace
+│   └── apps/
+│       ├── root.yaml              App-of-apps root — applied once manually to bootstrap
+│       ├── cert-manager.yaml      wave 0
+│       ├── external-secrets.yaml  wave 1
+│       ├── vault.yaml             wave 2
+│       ├── harbor.yaml            wave 3
+│       ├── gitlab.yaml            wave 3
+│       ├── grafana-alloy.yaml     wave 4
+│       └── renovate.yaml          wave 4
+├── apps/
+│   └── <service>/
+│       └── values.yaml            Helm values overlay (referenced via ArgoCD $values ref)
+└── scripts/
+    └── vault-init.sh              Post-unseal Vault configuration
 ```
 
-Repo lives in GitLab after bootstrap (`https://gitlab.lab.hezebonica.ca/homelab/gitops`).
+Each `Application` uses ArgoCD multi-source: the upstream Helm chart repo provides the chart; this repo provides the values overlay. Bootstrap:
 
-## ArgoCD Application helper
-
-`lib/argocd-app.libsonnet`:
-
-```jsonnet
-{
-  new(config):: {
-    apiVersion: 'argoproj.io/v1alpha1',
-    kind: 'Application',
-    metadata: { name: config.name, namespace: 'argocd' },
-    spec: {
-      project: 'default',
-      source: config.source,
-      destination: {
-        server: 'https://kubernetes.default.svc',
-        namespace: config.namespace,
-      },
-      syncPolicy: {
-        automated: { prune: true, selfHeal: true },
-        syncOptions: ['CreateNamespace=true'],
-      },
-    },
-  },
-
-  helm(name, namespace, repo, chart, version, values={}):: self.new({
-    name: name,
-    namespace: namespace,
-    source: {
-      repoURL: repo,
-      chart: chart,
-      targetRevision: version,
-      helm: { valuesObject: values },
-    },
-  }),
-
-  git(name, namespace, path, revision='HEAD'):: self.new({
-    name: name,
-    namespace: namespace,
-    source: {
-      repoURL: 'https://gitlab.lab.hezebonica.ca/homelab/gitops.git',
-      path: path,
-      targetRevision: revision,
-    },
-  }),
-}
+```bash
+kubectl apply -f argocd/projects/platform.yaml
+kubectl apply -f argocd/apps/root.yaml
+# ArgoCD discovers and syncs all apps in argocd/apps/ automatically
 ```
 
-## App-of-apps example
-
-`clusters/devops/main.jsonnet`:
-
-```jsonnet
-local app = import 'argocd-app.libsonnet';
-
-{
-  // Platform — third-party Helm
-  cilium: app.helm('cilium', 'kube-system',
-    'https://helm.cilium.io', 'cilium', '1.17.0',
-    { kubeProxyReplacement: true }),
-
-  metallb: app.helm('metallb', 'metallb-system',
-    'https://metallb.github.io/metallb', 'metallb', '0.14.0', {}),
-
-  longhorn: app.helm('longhorn', 'longhorn-system',
-    'https://charts.longhorn.io', 'longhorn', '1.7.0',
-    { defaultSettings: { defaultDataPath: '/var/mnt/longhorn' } }),
-
-  external_secrets: app.helm('external-secrets', 'external-secrets',
-    'https://charts.external-secrets.io', 'external-secrets', '0.10.0', {}),
-
-  // Platform services — third-party Helm
-  vault: app.helm('vault', 'vault',
-    'https://helm.releases.hashicorp.com', 'vault', '0.29.0',
-    { server: { ha: { enabled: true, replicas: 3 } } }),
-
-  harbor: app.helm('harbor', 'registry',
-    'https://helm.goharbor.io', 'harbor', '1.14.0',
-    { expose: { type: 'clusterIP' }, externalURL: 'https://harbor.lab.hezebonica.ca' }),
-
-  gitlab: app.helm('gitlab', 'gitlab',
-    'https://charts.gitlab.io', 'gitlab', '8.7.0',
-    {
-      global: {
-        hosts: { domain: 'lab.hezebonica.ca' },
-        ingress: { configureCertmanager: false, tls: { enabled: false } },
-      },
-    }),
-
-  argocd: app.helm('argocd', 'argocd',
-    'https://argoproj.github.io/argo-helm', 'argo-cd', '7.7.0', {}),
-
-  // First-party — git path to Tanka environment
-  alloy:          app.git('alloy',          'observability',  'environments/devops'),
-  gitlab_runner:  app.git('gitlab-runner',  'gitlab-runners', 'environments/devops'),
-}
-```
 
 ## Image promotion contract
 
@@ -387,14 +293,14 @@ Imperative bootstrap (Terraform + CLI), then GitOps takes over.
 1. ✅ **Provision 6 Talos VMs across 3 Proxmox hosts** — `terraform apply` in `terraform/talos-cluster/`
 2. ✅ **Apply machine configs + bootstrap etcd** — handled by `terraform apply` via the Talos provider
 3. ✅ **Install Cilium, MetalLB, Longhorn, ArgoCD** — `bash post-apply.sh`; ArgoCD exposed at `https://argocd.lab.hezebonica.ca` via MetalLB IP `192.168.57.100` + Traefik file-provider route
-4. **`tk apply clusters/devops`** — creates all Application CRDs
-5. **ArgoCD reconciles** — cert-manager → external-secrets → Vault (manual unseal) → Harbor → GitLab → runners → Alloy
-6. **Configure Vault** — enable k8s auth, create policies, wire external-secrets
-7. **Bootstrap GitLab** — root password, homelab group, gitops repo
-8. **Add remaining Traefik routes** — one file-provider entry per service (vault, harbor, gitlab, etc.)
+4. ✅ **GitOps repo scaffold** — `homelab-platform` on GitHub; `kubectl apply` of project + root app-of-apps; ArgoCD discovers and syncs all platform apps
+5. ✅ **Vault deployed and configured** — HA Raft (3 replicas), manually initialised + unsealed, Kubernetes auth enabled, external-secrets ClusterSecretStore wired (`scripts/vault-init.sh`)
+6. **Deploy Harbor** — configure TLS, Longhorn PVCs, MetalLB IP `.101`, Traefik route
+7. **Deploy GitLab** — root password from Vault, Longhorn PVCs, MetalLB IP `.102`, Traefik route, migrate `homelab-platform` repo from GitHub
+8. **Add remaining Traefik routes** — vault, harbor, gitlab
 9. **Configure Renovate** — scheduled pipeline + `renovate.json` in the gitops repo; group-scoped GitLab token in Vault
 
-Steps 1–3 are complete. Step 4 onward is next.
+Steps 1–5 are complete. Step 6 (Harbor) is next.
 
 ## Open questions / future work
 
