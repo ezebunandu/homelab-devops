@@ -92,7 +92,8 @@ homelab-devops/
 ├── devops-cluster-architecture.md   M2 design
 ├── terraform/
 │   ├── traefik-vm/                  M1 — edge VM (bpg/proxmox)
-│   └── talos-cluster/               M2 — 6-node Talos cluster (3CP+3W)
+│   ├── talos-cluster/               M2 — 6-node Talos cluster (3CP+3W)
+│   └── pve-observability/           M2 — Grafana Alloy on each PVE host (null_resource + Vault provider)
 └── scripts/
     ├── proxmox-setup.sh             PVE-side prep for Terraform
     ├── pihole-wildcard.sh           split-horizon DNS record

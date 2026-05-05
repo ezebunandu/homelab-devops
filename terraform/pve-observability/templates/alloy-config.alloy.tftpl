@@ -1,0 +1,77 @@
+// ============================================================
+// Grafana Alloy — Proxmox host telemetry
+// Host: ${hostname}
+// Credentials loaded from /etc/alloy/grafana-cloud.env via systemd EnvironmentFile.
+// ============================================================
+
+// ── Host OS metrics (equivalent to node_exporter) ──────────
+prometheus.exporter.unix "host" {
+  // Collects CPU, memory, filesystem, disk I/O, network, and systemd unit metrics.
+}
+
+prometheus.scrape "host" {
+  targets    = prometheus.exporter.unix.host.targets
+  forward_to = [prometheus.remote_write.grafana_cloud.receiver]
+  job_name   = "pve-node"
+
+  extra_labels = {
+    instance = "${hostname}",
+    cluster  = "devops-cluster",
+  }
+}
+
+// ── Systemd journal logs ────────────────────────────────────
+loki.source.journal "host" {
+  forward_to = [loki.write.grafana_cloud.receiver]
+  max_age    = "12h"
+
+  labels = {
+    job      = "pve-journal",
+    instance = "${hostname}",
+    cluster  = "devops-cluster",
+  }
+
+  relabel_rules = loki.relabel.journal.rules
+}
+
+loki.relabel "journal" {
+  forward_to = []
+
+  rule {
+    source_labels = ["__journal__systemd_unit"]
+    target_label  = "unit"
+  }
+  rule {
+    source_labels = ["__journal_priority_keyword"]
+    target_label  = "level"
+  }
+}
+
+// ── Grafana Cloud — Prometheus remote write ─────────────────
+prometheus.remote_write "grafana_cloud" {
+  endpoint {
+    url = env("GRAFANA_CLOUD_METRICS_URL")
+
+    basic_auth {
+      username = env("GRAFANA_CLOUD_METRICS_USERNAME")
+      password = env("GRAFANA_CLOUD_METRICS_TOKEN")
+    }
+
+    queue_config {
+      max_samples_per_send = 2000
+      batch_send_deadline  = "5s"
+    }
+  }
+}
+
+// ── Grafana Cloud — Loki push ───────────────────────────────
+loki.write "grafana_cloud" {
+  endpoint {
+    url = env("GRAFANA_CLOUD_LOGS_URL")
+
+    basic_auth {
+      username = env("GRAFANA_CLOUD_LOGS_USERNAME")
+      password = env("GRAFANA_CLOUD_LOGS_TOKEN")
+    }
+  }
+}
