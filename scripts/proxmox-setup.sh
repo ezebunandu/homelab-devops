@@ -18,6 +18,7 @@
 #   STORAGE         (default: local)
 #   DNS_PRIMARY     (default: 1.1.1.1)
 #   DNS_SECONDARY   (default: 8.8.8.8)
+#   DNS_SEARCH      (default: lab.hezebonica.ca)   required by PVE 8.x+ DNS API
 #
 set -euo pipefail
 
@@ -27,6 +28,7 @@ TOKEN_NAME="${TOKEN_NAME:-main}"
 STORAGE="${STORAGE:-local}"
 DNS_PRIMARY="${DNS_PRIMARY:-1.1.1.1}"
 DNS_SECONDARY="${DNS_SECONDARY:-8.8.8.8}"
+DNS_SEARCH="${DNS_SEARCH:-lab.hezebonica.ca}"
 
 PRIVS="Datastore.Allocate Datastore.AllocateSpace Datastore.Audit Datastore.AllocateTemplate \
 Pool.Allocate Pool.Audit \
@@ -49,8 +51,11 @@ require_root() {
 configure_dns() {
   local node
   node=$(hostname)
-  log "Setting DNS on node '$node' to ${DNS_PRIMARY}, ${DNS_SECONDARY}"
-  pvesh set "/nodes/${node}/dns" --dns1 "${DNS_PRIMARY}" --dns2 "${DNS_SECONDARY}" >/dev/null
+  log "Setting DNS on node '$node' to ${DNS_PRIMARY}, ${DNS_SECONDARY} (search: ${DNS_SEARCH})"
+  pvesh set "/nodes/${node}/dns" \
+    --dns1 "${DNS_PRIMARY}" \
+    --dns2 "${DNS_SECONDARY}" \
+    --search "${DNS_SEARCH}" >/dev/null
 }
 
 enable_snippets() {

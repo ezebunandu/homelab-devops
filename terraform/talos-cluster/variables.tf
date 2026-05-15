@@ -56,7 +56,7 @@ variable "hosts" {
     data_pool = string
   }))
   default = {
-    devops  = { os_pool = "local-ssd", data_pool = "local-lvm" }
+    devops  = { os_pool = "local-lvm", data_pool = "local-lvm" }
     devops2 = { os_pool = "local-lvm", data_pool = "local-lvm" }
     devops3 = { os_pool = "local-lvm", data_pool = "local-lvm" }
   }

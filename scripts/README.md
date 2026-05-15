@@ -7,6 +7,7 @@
 | `traefik-setup.sh` | Traefik VM, as service user | `~/traefik/` compose stack with the v3.6.6 config that works against Docker 29; owns `dynamic.d/00-base.yml` |
 | `traefik-add-pve-prod-cluster.sh` | Traefik VM, as service user | Drops `dynamic.d/20-pve-prod-cluster.yml` with routes for the 3 prod Proxmox nodes |
 | `pihole-wildcard.sh` | Host running the Pi-hole container, with sudo | Writes the `address=/<subdomain>/<ip>` record, validates, reloads |
+| `traefik-backup.sh` | Workstation | Pulls stateful Traefik config (`acme.json`, `dynamic.d/`, `.env`, compose files) off the Traefik VM over SSH; produces a timestamped tarball + SHA256 manifest |
 
 ## `proxmox-setup.sh`
 
@@ -153,6 +154,34 @@ Auto-detects the `/etc/dnsmasq.d` host mount. If the container uses a different 
 ```
 CONTAINER_NAME=pihole-v6 CONFIG_DIR=/var/lib/pihole/dnsmasq.d ./pihole-wildcard.sh ...
 ```
+
+## `traefik-backup.sh`
+
+Run on the workstation. Pulls stateful Traefik config off the VM over SSH so we can rebuild the VM via Terraform without losing the wildcard LE cert or `dynamic.d/` route drift.
+
+```bash
+./traefik-backup.sh
+# tarball + manifest land under ./backups/
+```
+
+Captures (skipping any that don't exist on the VM):
+
+- `letsencrypt/acme.json` — LE wildcard cert + ACME account state
+- `dynamic.d/` — route definitions beyond `00-base.yml`
+- `.env` — dashboard htpasswd hash (regenerated runs use a different salt)
+- `docker-compose.yml`, `traefik.yml` — for drift detection against rebuilt versions
+
+**Env var overrides:**
+
+```
+TRAEFIK_HOST=192.168.57.8
+TRAEFIK_USER=sam
+TRAEFIK_DIR=traefik            # path relative to ~/
+OUT_DIR=./backups
+SSH_KEY=                       # path to private key; uses ssh-agent if unset
+```
+
+Every invocation produces a fresh timestamped artefact (`traefik-backup-<host>-<UTC-timestamp>.tar.gz`) — re-running doesn't clobber prior backups. The script verifies the tarball with `sha256sum -c` before exiting; a non-zero exit means the backup is not usable.
 
 ## Order for a full rebuild
 
