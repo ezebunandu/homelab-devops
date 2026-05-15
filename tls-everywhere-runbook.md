@@ -10,7 +10,7 @@ Reproducible bring-up of the homelab's edge TLS layer: Traefik on a Debian 12 VM
 | Internal subdomain | `lab.hezebonica.ca` | All LAN services live here |
 | Wildcard cert | `*.lab.hezebonica.ca` (+ apex) | One cert covers everything |
 | Traefik VM IP | `192.168.57.8` | Debian 12, Docker, provisioned via Terraform |
-| Proxmox node | `devops` @ `192.168.57.7` | Dell T3600, PVE 9.1.1 |
+| Proxmox node | `devops` @ `192.168.57.7` | Minisforum MS-A2 (Ryzen 9 8945HX, 64 GB DDR5, 1 TB NVMe), PVE 9.1.1. Swapped from a Dell T3600 in May 2026 — lessons captured in `devops-cluster-architecture.md` operations notes. |
 | Pi-hole (internal DNS) | `172.16.0.2` | Existing container on a separate host |
 | ACME email | `sam.ezebunandu@gmail.com` | Receives renewal and revocation notices |
 | Cloudflare API token | (stored in password manager) | Zone-scoped, DNS:Edit only |
@@ -61,7 +61,7 @@ The Traefik host is a Debian 12 VM on Proxmox, provisioned by Terraform using `b
 
 **Target state:**
 - VM IP: `192.168.57.8`
-- Node: `devops` @ `192.168.57.7` (Dell T3600, PVE 9.1.1)
+- Node: `devops` @ `192.168.57.7` (Minisforum MS-A2, Ryzen 9 8945HX / 64 GB DDR5 / 1 TB NVMe, PVE 9.1.1)
 - Image: Debian 12 generic cloud image (qcow2)
 - User: `sam` (sudo, docker groups)
 - Docker Engine + Compose v2 installed via cloud-init
@@ -81,12 +81,12 @@ terraform init
 terraform apply
 ```
 
-**T3600 / rebuild gotchas worth remembering:**
-- Installer hangs on Quadro K4000 without `nomodeset` boot flag
-- DNS needs to be set explicitly on PVE (`pvesh set /nodes/devops/dns --dns1 1.1.1.1 --dns2 8.8.8.8`) or image downloads fail
-- Fresh KVM state sometimes panics new VMs on first boot — a single host reboot clears it
-- PVE 9.x role-privilege changes bit us repeatedly: `VM.Monitor` was removed (listing it rejects the whole role definition); `Datastore.Allocate` is required in addition to `AllocateSpace` for snippet uploads; `VM.GuestAgent.Audit` is required whenever the Terraform VM has `agent.enabled = true` (bpg queries the guest agent for IPs post-boot — without it you get `HTTP 403 ... VM.GuestAgent.Audit|VM.GuestAgent.Unrestricted`)
+**Rebuild gotchas worth remembering:**
+- DNS needs to be set explicitly on PVE (`pvesh set /nodes/devops/dns --dns1 1.1.1.1 --dns2 8.8.8.8 --search lab.hezebonica.ca`) or image downloads fail. PVE 9.x requires `--search`; the older syntax without it returns `400 Parameter verification failed`. `scripts/proxmox-setup.sh` handles this idempotently.
+- PVE 9.x role-privilege changes: `VM.Monitor` was removed (listing it rejects the whole role definition); `Datastore.Allocate` is required in addition to `AllocateSpace` for snippet uploads; `VM.GuestAgent.Audit` is required whenever the Terraform VM has `agent.enabled = true` (bpg queries the guest agent for IPs post-boot — without it you get `HTTP 403 ... VM.GuestAgent.Audit|VM.GuestAgent.Unrestricted`).
 - Traefik requires **v3.6.6+** on Docker 29. Earlier v3.x silently fails container discovery via the Docker provider ([traefik/traefik#12253](https://github.com/traefik/traefik/issues/12253)). Also pass static config via `command:` flags rather than a mounted `traefik.yml` — v3.6 behaves inconsistently when both are present.
+- **MS-A2 / Ryzen 9 8945HX SRSO panic** (Zen 4 specific): VMs configured with `cpu { type = "host" }` and Debian 12 stable kernel kernel-panic at boot with `srso_alias_return_thunk` in the stack trace. Fix: `cpu { type = "x86-64-v2-AES" }` in the Terraform VM resource. Talos's newer kernel handles `host` fine.
+- **Legacy T3600-only gotchas** (kept here as the Dell may resurface in a lab/backup role): installer hangs on the Quadro K4000 without `nomodeset` boot flag; fresh KVM state sometimes panics new VMs on first boot — a single host reboot clears it.
 
 ## Prereq 5 — Pi-hole wildcard for `*.lab.hezebonica.ca`
 

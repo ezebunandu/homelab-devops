@@ -38,32 +38,41 @@ This doc is M2 — it assumes M1 is complete.
 
 ```
 Proxmox cluster (devops-cluster)
-├── devops    (192.168.57.7)   Dell T3600, 8 vCPU, 64 GB
+├── devops    (192.168.57.7)   Minisforum MS-A2, Ryzen 9 8945HX (16C/32T), 64 GB DDR5, 1 TB NVMe
 │   ├── traefik   192.168.57.8    edge proxy
 │   ├── talos-01  192.168.57.20   control plane
-│   └── talos-04  192.168.57.23   worker
-├── devops2   (192.168.57.9)   4 vCPU, 15.5 GB
+│   └── talos-04  192.168.57.23   worker (fat — heavy pods land here)
+├── devops2   (192.168.57.9)   Intel i5-7500T, 4 vCPU, 32 GB
 │   ├── talos-02  192.168.57.21   control plane
-│   └── talos-05  192.168.57.24   worker
-└── devops3   (192.168.57.10)  4 vCPU, 15.5 GB
+│   └── talos-05  192.168.57.24   worker (slim)
+└── devops3   (192.168.57.10)  Intel i5-7500T, 4 vCPU, 32 GB
     ├── talos-03  192.168.57.22   control plane
-    └── talos-06  192.168.57.25   worker
+    └── talos-06  192.168.57.25   worker (slim)
 
 kube API VIP   192.168.57.30   Talos L2 VIP (floats across CPs)
 ```
 
-`kubectl` targets `https://192.168.57.30:6443` — doesn't care which CP node is up. VIP is currently blocked by Firewalla so `kubectl` points at `192.168.57.20` directly in the interim.
+`kubectl` targets `https://192.168.57.30:6443` — doesn't care which CP node is up. VIP is currently blocked by Firewalla so `kubectl` points at `192.168.57.21` (talos-02) directly in the interim. (Originally `.20`/talos-01, repointed during the MS-A2 hardware swap to a CP that wouldn't go offline.)
+
+### Hardware refresh — May 2026
+
+`devops` was originally a Dell T3600 (8 vCPU Xeon, 64 GB DDR3, mixed HDD+SSD storage). Swapped in-place for the Minisforum MS-A2 in May 2026 while preserving IP, hostname, cluster membership, and all running workloads. `devops2`/`devops3` RAM upgraded from 15.5 GB → 32 GB ahead of the swap. Lessons learned during the swap are captured in the [Operations notes](#operations-notes--hard-won-lessons) section below.
+
+Notable changes vs the original M2 design:
+- **Storage**: single 1 TB NVMe on `devops` (no `local-ssd` tier). Both `os_pool` and `data_pool` on `devops` now use `local-lvm`.
+- **Asymmetric workers**: `talos-04` resized to 8 vCPU / 28 GB to absorb heavy pods (Vault, Harbor, GitLab, ArgoCD); `talos-05`/`talos-06` remain at 2 vCPU / 7 GB pending a planned post-migration resize to 16 GB.
+- **CP-toleration gap discovered**: Longhorn `instance-manager` DaemonSet doesn't tolerate the CP `NoSchedule` taint, so the 100 GB CP data disks (300 GB total) are stranded. Tracked as open work; Harbor's `harbor-registry` PVC is at 2/3 replica health as a direct consequence.
 
 ## Node specs
 
 **Control plane nodes (talos-01/02/03):**
 
-| Resource | talos-01 | talos-02 / talos-03 |
+| Resource | talos-01 (on `devops` / MS-A2) | talos-02 / talos-03 (on `devops2` / `devops3`) |
 |---|---|---|
 | vCPU | 4 | 2 |
-| RAM | 8 GB | 8 GB |
+| RAM | 8 GB | 8 GB (resize to 12 GB pending — hardware now supports it) |
 | Root disk | 32 GB (scsi0) — Talos system | 32 GB (scsi0) — Talos system |
-| Data disk | 100 GB (scsi1) — Longhorn replica | 100 GB (scsi1) — Longhorn replica |
+| Data disk | 100 GB (scsi1) — Longhorn replica (currently stranded; see CP-toleration gap above) | 100 GB (scsi1) — Longhorn replica (stranded) |
 | Network | single NIC on `vmbr0`, static IP | single NIC on `vmbr0`, static IP |
 | Firmware | SeaBIOS | SeaBIOS |
 | Machine type | q35 | q35 |
@@ -73,10 +82,10 @@ kube API VIP   192.168.57.30   Talos L2 VIP (floats across CPs)
 
 **Worker nodes (talos-04/05/06):**
 
-| Resource | talos-04 | talos-05 / talos-06 |
+| Resource | talos-04 (on `devops` / MS-A2 — fat) | talos-05 / talos-06 (on `devops2` / `devops3` — slim) |
 |---|---|---|
-| vCPU | 2 | 2 |
-| RAM | 8 GB | 7 GB |
+| vCPU | 8 | 2 |
+| RAM | 28 GB | 7 GB (resize to 16 GB pending) |
 | Root disk | 32 GB (scsi0) — Talos system | 32 GB (scsi0) — Talos system |
 | Data disk | 200 GB (scsi1) — Longhorn replica | 200 GB (scsi1) — Longhorn replica |
 | Network | single NIC on `vmbr0`, static IP | single NIC on `vmbr0`, static IP |
@@ -84,7 +93,9 @@ kube API VIP   192.168.57.30   Talos L2 VIP (floats across CPs)
 | Machine type | q35 | q35 |
 | SCSI controller | virtio-scsi-single | virtio-scsi-single |
 
-Cluster totals: 16 vCPU, 47 GB RAM, ~1.4 TB storage committed to k8s.
+Cluster totals (current): **18 vCPU, 66 GB RAM**, ~1.4 TB storage committed to k8s. After the pending slim-worker + CP RAM resizes: **18 vCPU, 82 GB RAM**.
+
+The asymmetric worker sizing is deliberate: `talos-04` on the MS-A2 has the headroom to host GitLab + Harbor + ArgoCD + one Vault replica + bursts; the slim workers on `devops2`/`devops3` exist primarily to hold Longhorn replicas in different physical failure domains, with capacity for light pods. Scheduling spreads via soft `nodeAffinity` for `workload-tier=heavy` on `talos-04` is **pending** (open-work item — without it the scheduler may place heavy pods on slim workers when capacity is tight).
 
 ## Network layout
 
@@ -142,7 +153,8 @@ gitlab-runners     gitlab-runner (k8s executor, spawns per-job pods)
 | GitLab Runner (idle) | 1 GB |
 | Overhead / burst | 5 GB |
 | **Committed** | **~31 GB** |
-| **Cluster budget (47 GB)** | ~16 GB headroom |
+| **Cluster budget (current: 66 GB)** | **~35 GB headroom** post-MS-A2 swap |
+| **Cluster budget (after pending CP+slim-worker resizes: 82 GB)** | ~51 GB headroom |
 
 ## Edge integration — Traefik VM stays
 
@@ -295,12 +307,14 @@ Imperative bootstrap (Terraform + CLI), then GitOps takes over.
 3. ✅ **Install Cilium, MetalLB, Longhorn, ArgoCD** — `bash post-apply.sh`; ArgoCD exposed at `https://argocd.lab.hezebonica.ca` via MetalLB IP `192.168.57.100` + Traefik file-provider route
 4. ✅ **GitOps repo scaffold** — `homelab-platform` on GitHub; `kubectl apply` of project + root app-of-apps; ArgoCD discovers and syncs all platform apps
 5. ✅ **Vault deployed and configured** — HA Raft (3 replicas), manually initialised + unsealed, Kubernetes auth enabled, external-secrets ClusterSecretStore wired (`scripts/vault-init.sh`)
-6. **Deploy Harbor** — configure TLS, Longhorn PVCs, MetalLB IP `.101`, Traefik route
+6. ⚠ **Deploy Harbor** — deployed and serving; `harbor-registry` PVC is degraded at 2/3 Longhorn replicas due to the CP-toleration gap (see open work).
 7. **Deploy GitLab** — root password from Vault, Longhorn PVCs, MetalLB IP `.102`, Traefik route, migrate `homelab-platform` repo from GitHub
-8. **Add remaining Traefik routes** — vault, harbor, gitlab
+8. **Add remaining Traefik routes** — vault, harbor, gitlab (ArgoCD route already live)
 9. **Configure Renovate** — scheduled pipeline + `renovate.json` in the gitops repo; group-scoped GitLab token in Vault
 
-Steps 1–5 are complete. Step 6 (Harbor) is next.
+Steps 1–5 complete. Step 6 (Harbor) is deployed but degraded — see open work. Step 7 (GitLab) is next.
+
+> **Hardware refresh interlude (May 2026):** the `devops` PVE host was swapped from a Dell T3600 to a Minisforum MS-A2 mid-bootstrap, between deploying Vault (DC-5) and finishing Harbor/GitLab (DC-6/7). The cluster came through the swap intact with `talos-01` and `talos-04` recreated on the new hardware; no etcd or Vault data was lost. Operational lessons from the swap are captured in the [Operations notes](#operations-notes--hard-won-lessons) section below.
 
 ## Open questions / future work
 
@@ -312,3 +326,75 @@ Steps 1–5 are complete. Step 6 (Harbor) is next.
 - **Cluster upgrades** — `talosctl upgrade` per node; rehearse before production-critical use
 - **Disaster recovery** — etcd snapshots via Talos; Velero for PV/k8s state
 - **IP-allocation pre-flight** — an `arping`-based Terraform `data "external"` that fails a plan if the target IP is live on the LAN. Cheap belt-and-braces against static-IP collisions for Talos nodes, kube-vip VIP, and future scratch/service VMs. Firewalla API integration (for visibility into *leased-but-offline* devices + active IP reservation) is strictly heavier; only worth it if we also want reservation semantics. Deferred — revisit if the DHCP-pool shrink (above) ends up not sufficient.
+
+## Operations notes — hard-won lessons
+
+Captured from the MS-A2 hardware refresh (May 2026) and earlier bring-up. Each one cost real time to discover; the next person doing similar work shouldn't have to rediscover them.
+
+### Draining a worker fails on Vault and Longhorn PDBs
+
+With only 3 worker nodes and Vault's hostname-level `podAntiAffinity` requiring 1-per-node, cordoning any worker leaves the displaced Vault pod with nowhere to schedule. Eviction blocks on the Vault PDB indefinitely; the Longhorn `instance-manager` PDB then blocks on the same node because the volume is still attached. Drain hangs.
+
+**Workaround**: before draining a worker, scale Vault to 2 replicas (suspend ArgoCD auto-sync first so it doesn't immediately revert), then drain, then scale back after the new node is in place. Unseal the recreated vault-2 with Shamir shares; re-enable ArgoCD auto-sync.
+
+```bash
+kubectl -n argocd patch app vault --type merge \
+  -p '{"spec":{"syncPolicy":{"automated":null}}}'
+kubectl -n vault scale statefulset vault --replicas=2
+# ... do drain work ...
+kubectl -n vault scale statefulset vault --replicas=3
+kubectl exec -it -n vault vault-2 -- vault operator unseal   # x3
+kubectl -n argocd patch app vault --type merge \
+  -p '{"spec":{"syncPolicy":{"automated":{"prune":true,"selfHeal":true}}}}'
+```
+
+### Longhorn replicas can land on CPs that can't host them
+
+Longhorn's `instance-manager` DaemonSet doesn't tolerate the `node-role.kubernetes.io/control-plane:NoSchedule` taint by default. So although CP nodes have 100 GB Longhorn data disks provisioned (per `terraform/talos-cluster/main.tf`), no instance-manager runs on them — making 300 GB of storage effectively unreachable. Replica scheduling falls back to 3 worker nodes only, which can hit the default 30% reserved-storage threshold quickly. Symptom: `precheck new replica failed: insufficient storage`.
+
+**Fix**: add the CP toleration to Longhorn's `defaultSettings.taintToleration` in Helm values:
+```yaml
+defaultSettings:
+  taintToleration: "node-role.kubernetes.io/control-plane:NoSchedule"
+```
+
+### `/etc/pve/priv/known_hosts` doesn't support `ssh-keygen -R`
+
+`/etc/pve` is pmxcfs (FUSE-backed SQLite), which doesn't support hard links. `ssh-keygen -R` creates a `.old` backup via hard-link before rewriting, so it fails with `Operation not permitted`.
+
+**Workaround** — `awk`-filter and overwrite. pmxcfs is cluster-replicated, so editing on one node propagates:
+```bash
+awk '!/<IP_TO_REMOVE>/ && !/^<HOSTNAME_TO_REMOVE>/' \
+  /etc/pve/priv/known_hosts > /tmp/kh.tmp &&
+cp /tmp/kh.tmp /etc/pve/priv/known_hosts &&
+rm /tmp/kh.tmp
+```
+
+### `pvecm add` doesn't fully populate per-node `/root/.ssh/known_hosts`
+
+When a node rejoins a PVE cluster, the cluster-wide `/etc/pve/priv/known_hosts` gets updated, but each surviving node's `/root/.ssh/known_hosts` is per-node and not auto-updated. `ssh`/`scp` between PVE nodes from `root@` then prompts interactively and breaks scripted operations (Terraform SSH provisioners, image staging).
+
+**Fix** — prime explicitly after `pvecm add` (and after any host SSH key rotation):
+```bash
+ssh root@<surviving-node-ip> 'ssh-keyscan -H <new-node-ip> >> /root/.ssh/known_hosts'
+```
+
+### Talos cloud image is not auto-staged on new PVE nodes
+
+`terraform/talos-cluster/` references the Talos image at `local:iso/talos-<schematic-id>-<version>.img` but doesn't include a download resource. On a fresh PVE node, terraform fails with `creating custom disk: ... non-existent or non-regular file`.
+
+**Workaround**: copy from any existing PVE node before applying:
+```bash
+ssh root@<existing-pve-node> \
+  'scp /var/lib/vz/template/iso/talos-*.img root@<new-pve-node>:/var/lib/vz/template/iso/'
+```
+
+Tracked as a backlog item in the README — adding a `proxmox_virtual_environment_download_file` resource would close this for good.
+
+### Kubelet/kubectl is hardcoded to one CP IP, not the VIP
+
+`kubeconfig` is rendered with `server: https://192.168.57.30:6443` (the VIP), but Firewalla blocks the L2 VIP traffic. Until the Firewalla rule is fixed, `kubectl` must point at a specific CP IP directly. **Important during host swaps**: that target CP must not be the one being taken down. After removing `talos-01`, repointed to `https://192.168.57.21:6443` (talos-02):
+
+```bash
+kubectl config set-cluster devops --server=https://192.168.57.21:6443
+```

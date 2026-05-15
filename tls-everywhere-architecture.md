@@ -145,7 +145,7 @@ Terraform state lives locally in `.tfstate` files, gitignored. Acceptable becaus
 - State is reproducible from the code + current PVE state
 - No blast radius for state loss — a new apply rebuilds the VM cleanly
 
-Future: once Vault is running in the devops cluster, state can move to Vault KV or an S3 backend on the planned NAS.
+Vault is now running in the devops cluster (M2 / DC-5), so moving the Terraform state to Vault KV or an S3 backend on a future NAS is unblocked — still future work, but no longer prerequisite-gated.
 
 ### Proxmox-side prerequisites (captured in the plan)
 
