@@ -36,7 +36,10 @@ resource "proxmox_virtual_environment_vm" "traefik" {
 
   cpu {
     cores = var.vm_cpu_cores
-    type  = "host"
+    # x86-64-v2-AES: stable virtual CPU model, vendor-agnostic, retains AES-NI
+    # for TLS. Avoid 'host' — passing raw Ryzen CPUID through to the Debian 12
+    # stable kernel triggers an SRSO-related panic during init on the MS-A2.
+    type  = "x86-64-v2-AES"
   }
 
   memory {
