@@ -1,0 +1,19 @@
+http:
+  routers:
+    vault:
+      rule: "Host(`vault.lab.hezebonica.ca`)"
+      entryPoints: [websecure]
+      service: vault
+      tls:
+        certResolver: cloudflare
+
+  services:
+    vault:
+      loadBalancer:
+        servers:
+          # Vault HA Raft, exposed via MetalLB at 192.168.57.103:8200.
+          # Plain HTTP upstream — Vault has no in-cluster TLS configured;
+          # Traefik terminates HTTPS at the edge with the wildcard cert.
+          # Standby pods 307-redirect writes to the active leader; vault CLI
+          # follows redirects automatically.
+          - url: "http://192.168.57.103:8200"

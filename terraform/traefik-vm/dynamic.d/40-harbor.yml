@@ -1,0 +1,18 @@
+http:
+  routers:
+    harbor:
+      rule: "Host(`harbor.lab.hezebonica.ca`)"
+      entryPoints: [websecure]
+      service: harbor
+      tls:
+        certResolver: cloudflare
+
+  services:
+    harbor:
+      loadBalancer:
+        servers:
+          # Harbor LoadBalancer service via MetalLB. Plain HTTP upstream:
+          # the chart's TLS termination is disabled (apps/harbor/values.yaml,
+          # expose.tls.enabled=false) so Traefik handles HTTPS at the edge
+          # with the wildcard *.lab.hezebonica.ca cert.
+          - url: "http://192.168.57.101"
