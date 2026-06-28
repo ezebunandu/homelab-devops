@@ -1,7 +1,7 @@
 variable "alloy_version" {
   description = "Grafana Alloy release version to install (without leading 'v'). Check https://github.com/grafana/alloy/releases for the latest."
   type        = string
-  default     = "1.8.1"
+  default     = "1.17.0"
 }
 
 variable "pve_hosts" {
