@@ -3,6 +3,32 @@ data "vault_kv_secret_v2" "grafana_cloud" {
   name  = var.vault_secret_path
 }
 
+# ── Grafana Cloud ingest credential (minted as code) ─────────────────────────
+# A dedicated, write-only access policy for the Proxmox telemetry source.
+# One token covers both metrics and logs ingestion; the per-signal endpoints
+# and usernames (instance IDs) still come from Vault. Keeping this policy
+# separate from other sources (e.g. k8s) means it can be revoked/rotated in
+# isolation. Rotate the token with:  terraform apply -replace=grafana_cloud_access_policy_token.pve
+resource "grafana_cloud_access_policy" "pve" {
+  region       = var.grafana_cloud_region
+  name         = "pve-observability-write"
+  display_name = "Proxmox observability (write-only)"
+
+  scopes = ["metrics:write", "logs:write"]
+
+  realm {
+    type       = "stack"
+    identifier = var.grafana_cloud_stack_id
+  }
+}
+
+resource "grafana_cloud_access_policy_token" "pve" {
+  region           = var.grafana_cloud_region
+  access_policy_id = grafana_cloud_access_policy.pve.policy_id
+  name             = "pve-observability"
+  display_name     = "Proxmox observability"
+}
+
 locals {
   # Rendered Alloy config per host — used for trigger hash and file provisioner.
   alloy_configs = {
@@ -12,14 +38,15 @@ locals {
     })
   }
 
-  # Hash of all Grafana Cloud credential values — triggers re-provisioning on rotation.
+  # Hash of all Grafana Cloud credential values — triggers re-provisioning on
+  # rotation. The single write token is sourced from the minted access policy,
+  # so replacing the token resource re-provisions every host automatically.
   credentials_hash = sha256(join("\n", [
     data.vault_kv_secret_v2.grafana_cloud.data["metrics_url"],
     data.vault_kv_secret_v2.grafana_cloud.data["metrics_username"],
-    data.vault_kv_secret_v2.grafana_cloud.data["metrics_token"],
     data.vault_kv_secret_v2.grafana_cloud.data["logs_url"],
     data.vault_kv_secret_v2.grafana_cloud.data["logs_username"],
-    data.vault_kv_secret_v2.grafana_cloud.data["logs_token"],
+    grafana_cloud_access_policy_token.pve.token,
   ]))
 }
 
@@ -46,10 +73,10 @@ resource "null_resource" "alloy_pve" {
     content = sensitive(join("\n", [
       "GRAFANA_CLOUD_METRICS_URL=${data.vault_kv_secret_v2.grafana_cloud.data["metrics_url"]}",
       "GRAFANA_CLOUD_METRICS_USERNAME=${data.vault_kv_secret_v2.grafana_cloud.data["metrics_username"]}",
-      "GRAFANA_CLOUD_METRICS_TOKEN=${data.vault_kv_secret_v2.grafana_cloud.data["metrics_token"]}",
       "GRAFANA_CLOUD_LOGS_URL=${data.vault_kv_secret_v2.grafana_cloud.data["logs_url"]}",
       "GRAFANA_CLOUD_LOGS_USERNAME=${data.vault_kv_secret_v2.grafana_cloud.data["logs_username"]}",
-      "GRAFANA_CLOUD_LOGS_TOKEN=${data.vault_kv_secret_v2.grafana_cloud.data["logs_token"]}",
+      # Single write-only token (metrics:write + logs:write) for both signals.
+      "GRAFANA_CLOUD_TOKEN=${grafana_cloud_access_policy_token.pve.token}",
     ]))
     destination = "/etc/alloy/grafana-cloud.env"
   }
@@ -88,6 +115,44 @@ resource "null_resource" "alloy_pve" {
       "systemctl enable alloy",
       "systemctl restart alloy",
       "systemctl is-active alloy",
+    ]
+  }
+}
+
+# ── Proxmox external metric server (PVE 9 native OpenTelemetry) ──────────────
+# Cluster-wide config lives in /etc/pve/status.cfg (replicated by pmxcfs), so
+# this only needs to run on one node. Pointing at 127.0.0.1 makes every node's
+# pvestatd push its own metrics to its own local Alloy OTLP receiver (:4318).
+# Depends on the per-host Alloy roll-out so the receiver is listening first.
+resource "null_resource" "pve_metric_server" {
+  depends_on = [null_resource.alloy_pve]
+
+  triggers = {
+    # Re-applies if the target endpoint changes.
+    endpoint = "127.0.0.1:4318/v1/metrics"
+  }
+
+  connection {
+    type  = "ssh"
+    host  = values(var.pve_hosts)[0]
+    user  = "root"
+    agent = true
+  }
+
+  # Delete-then-create keeps the entry idempotent and always matching desired
+  # params (create is POST and rejects an existing id; this avoids drift).
+  provisioner "remote-exec" {
+    inline = [
+      "set -euo pipefail",
+      "pvesh delete /cluster/metrics/server/alloy 2>/dev/null || true",
+      "pvesh create /cluster/metrics/server/alloy \\",
+      "  --type opentelemetry \\",
+      "  --server 127.0.0.1 \\",
+      "  --port 4318 \\",
+      "  --otel-protocol http \\",
+      "  --otel-path /v1/metrics \\",
+      "  --otel-compression gzip",
+      "pvesh get /cluster/metrics/server/alloy",
     ]
   }
 }

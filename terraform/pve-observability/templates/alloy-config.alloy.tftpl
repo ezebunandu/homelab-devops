@@ -20,6 +20,50 @@ prometheus.scrape "host" {
   }
 }
 
+// ── Proxmox VE guest / cluster / storage metrics (PVE 9 native OTLP) ─────────
+// pvestatd on this host pushes node, guest, and storage metrics over OTLP/HTTP
+// to the local receiver below (configured cluster-wide to target localhost, so
+// each node ships its own slice). We stamp identity labels to match the
+// node_exporter scrape, then convert OTLP → Prometheus before remote_write.
+// node_exporter (above) still owns deep host-OS metrics; this adds the
+// virtualization layer (per-guest, storage pools, cluster) it can't see.
+otelcol.receiver.otlp "pve" {
+  http {
+    endpoint = "127.0.0.1:4318"
+  }
+
+  output {
+    metrics = [otelcol.processor.attributes.pve.input]
+  }
+}
+
+otelcol.processor.attributes "pve" {
+  action {
+    key    = "instance"
+    value  = "${hostname}"
+    action = "upsert"
+  }
+  action {
+    key    = "cluster"
+    value  = "devops-cluster"
+    action = "upsert"
+  }
+
+  output {
+    metrics = [otelcol.exporter.prometheus.pve.input]
+  }
+}
+
+otelcol.exporter.prometheus "pve" {
+  // Promote OTLP resource attributes (node, vmid, guest name, storage id) to
+  // Prometheus labels — otherwise per-guest/per-pool series are indistinguishable.
+  // Proxmox's resource attributes are low-cardinality; if labels turn noisy,
+  // narrow this with an otelcol.processor.transform instead.
+  resource_to_telemetry_conversion = true
+
+  forward_to = [prometheus.remote_write.grafana_cloud.receiver]
+}
+
 // ── Systemd journal logs ────────────────────────────────────
 loki.source.journal "host" {
   forward_to = [loki.write.grafana_cloud.receiver]
@@ -54,7 +98,7 @@ prometheus.remote_write "grafana_cloud" {
 
     basic_auth {
       username = env("GRAFANA_CLOUD_METRICS_USERNAME")
-      password = env("GRAFANA_CLOUD_METRICS_TOKEN")
+      password = env("GRAFANA_CLOUD_TOKEN")
     }
 
     queue_config {
@@ -71,7 +115,7 @@ loki.write "grafana_cloud" {
 
     basic_auth {
       username = env("GRAFANA_CLOUD_LOGS_USERNAME")
-      password = env("GRAFANA_CLOUD_LOGS_TOKEN")
+      password = env("GRAFANA_CLOUD_TOKEN")
     }
   }
 }

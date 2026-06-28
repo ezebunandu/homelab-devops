@@ -95,11 +95,11 @@ Home LAN (192.168.57.0/24)
 | Talos K8s cluster | ✅ Live | 6 nodes (3CP+3W), Cilium CNI, MetalLB |
 | Longhorn | ⚠ Live, capacity-constrained | Harbor PVC degraded at 2/3 replicas — CP-toleration gap stranding ~300 GB of disk |
 | ArgoCD (GitOps) | ✅ Live | App-of-apps from `homelab-platform` (GitHub for now) |
-| Vault | ✅ Live | 3-replica HA-Raft, manual unseal |
-| Harbor | ⚠ Deployed | Storage-degraded (see Longhorn) |
+| Vault | ✅ Live | 3-replica HA-Raft, manual unseal. MetalLB `.103`; Traefik-fronted at `https://vault.lab.hezebonica.ca`. |
+| Harbor | ✅ Live | TLS terminated at Traefik (`https://harbor.lab.hezebonica.ca`); chart secrets pinned in Vault via external-secrets. Storage still 2/3 replicas — see Longhorn row. |
 | GitLab + Runner | 🟡 Planned (DC-6/7) | Self-hosted; replaces GitHub for `homelab-platform` once live |
 | Renovate | 🟡 Planned (DC-10) | Scheduled GitLab pipeline, 7-day stability window |
-| PVE-host observability | 🟡 Planned (greenfield) | Host metrics + journald → Grafana Cloud via PVE 9's native OTLP push to a local Alloy. Terraform drafted; never applied. **First observability work to land.** |
+| PVE-host observability | 🟡 Built — pending apply | Per-host Alloy ships node_exporter host metrics + journald logs, plus PVE 9's native OTLP push (guest/cluster/storage) into the same local Alloy → Grafana Cloud. One write-only Grafana Cloud access-policy token, minted as code via the Grafana Terraform provider. Terraform written and `validate`-clean; not yet applied/verified. **First observability work to land.** |
 | In-cluster K8s observability | ❌ Separately broken, separately scoped | Existing Alloy DaemonSet stuck `0/2 ContainerCreating` since deployment. **Different project from PVE-host observability** — separate config, separate scrape targets (kube-state-metrics, cAdvisor, pod logs), separate cost profile against the Grafana Cloud free tier. Tackled after PVE-host observability and GitLab are live. |
 | Tailscale (zero-trust remote access) | 🟡 Planned (greenfield) | Terraform drafted; never applied |
 | Backups | 🟡 Partial | Per-VM `vzdump`, data-level `scripts/traefik-backup.sh`. No Velero yet. |
@@ -109,7 +109,7 @@ Home LAN (192.168.57.0/24)
 In priority order:
 
 1. **Tailscale rollout** — provision Vault secret, apply `terraform/tailscale/`, approve subnet route. ~2 hours. Useful as a precondition for the next items (remote debugging when something acts up).
-2. **PVE-host observability** — redesign `terraform/pve-observability/` against PVE 9's native OTLP metric server, push to Grafana Cloud. Greenfield since the original draft was never applied. ~1 day.
+2. **PVE-host observability** — `terraform/pve-observability/` rebuilt against PVE 9's native OTLP metric server: node_exporter host metrics + OTLP guest/cluster/storage → local Alloy → Grafana Cloud, behind a single write-only access-policy token. Code written and `terraform validate`-clean. Remaining: add `management_token` to Vault, set `grafana_cloud_region`/`grafana_cloud_stack_id`, `apply`, confirm series land in Grafana Cloud. ~2 hours.
 3. **GitLab + Runner** (DC-6/7) — deploy via Helm, MetalLB IP `.102`, Traefik route, migrate `homelab-platform` repo from GitHub to in-lab GitLab. Unblocks Renovate (DC-10) and the full CI → Harbor → ArgoCD loop running on self-hosted infrastructure.
 4. **Stabilize Longhorn capacity** — add CP-toleration to Longhorn's `instance-manager` DaemonSet, unstrand the 300 GB of CP-attached Longhorn disks. Restores Harbor to 3/3 replicas. Can be picked up in parallel with any of the above.
 5. **Talos node resizes** — post-MS-A2-migration follow-up: bump `talos-02`/`talos-03` CPs to 12 GB, `talos-05`/`talos-06` workers to 16 GB. One-at-a-time maintenance.
@@ -145,7 +145,7 @@ homelab-devops/
 ├── terraform/
 │   ├── traefik-vm/                 M1 — edge VM
 │   ├── talos-cluster/              M2 — 6-node Talos cluster
-│   ├── pve-observability/          M2 — Alloy on PVE hosts (drafted; not yet applied — see active work)
+│   ├── pve-observability/          M2 — Alloy on PVE hosts: node_exporter + PVE 9 OTLP push → Grafana Cloud (built; pending apply)
 │   ├── tailscale/                  M2 — Tailscale (drafted; not yet applied)
 │   └── scratch-vm/                 ad-hoc scratch VM for one-off experiments
 └── scripts/
