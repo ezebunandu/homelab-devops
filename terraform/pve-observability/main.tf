@@ -104,6 +104,8 @@ resource "null_resource" "alloy_pve" {
       "TARGET=v${var.alloy_version}",
       "if [ \"$INSTALLED\" != \"$TARGET\" ]; then",
       "  echo \"Installing Alloy $TARGET (installed: $INSTALLED)\"",
+      "  # Proxmox ships without unzip; install it (tolerate a noisy apt-get update on no-subscription hosts).",
+      "  command -v unzip >/dev/null 2>&1 || { apt-get update -qq || true; DEBIAN_FRONTEND=noninteractive apt-get install -y -qq unzip; }",
       "  curl -fsSL https://github.com/grafana/alloy/releases/download/$TARGET/alloy-linux-amd64.zip -o /tmp/alloy.zip",
       "  cd /tmp && unzip -o alloy.zip alloy-linux-amd64",
       "  install -m 755 /tmp/alloy-linux-amd64 /usr/local/bin/alloy",
