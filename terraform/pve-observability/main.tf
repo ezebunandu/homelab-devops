@@ -125,7 +125,11 @@ resource "null_resource" "alloy_pve" {
       "systemctl daemon-reload",
       "systemctl enable alloy",
       "systemctl restart alloy",
-      "systemctl is-active alloy",
+      # Type=simple returns success at exec; settle, then verify it's truly up
+      # (a config error crash-loops, which a bare is-active would miss) and that
+      # the OTLP receiver is bound before the metric-server step tests it.
+      "sleep 3",
+      "systemctl is-active --quiet alloy || { journalctl -u alloy --no-pager -n 30; exit 1; }",
     ]
   }
 }

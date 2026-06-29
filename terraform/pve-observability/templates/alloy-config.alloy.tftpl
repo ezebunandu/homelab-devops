@@ -9,15 +9,25 @@ prometheus.exporter.unix "host" {
   // Collects CPU, memory, filesystem, disk I/O, network, and systemd unit metrics.
 }
 
+// prometheus.scrape has no static-label argument; inject instance/cluster onto
+// the targets via discovery.relabel, then scrape the relabeled output.
+discovery.relabel "host" {
+  targets = prometheus.exporter.unix.host.targets
+
+  rule {
+    target_label = "instance"
+    replacement  = "${hostname}"
+  }
+  rule {
+    target_label = "cluster"
+    replacement  = "devops-cluster"
+  }
+}
+
 prometheus.scrape "host" {
-  targets    = prometheus.exporter.unix.host.targets
+  targets    = discovery.relabel.host.output
   forward_to = [prometheus.remote_write.grafana_cloud.receiver]
   job_name   = "pve-node"
-
-  extra_labels = {
-    instance = "${hostname}",
-    cluster  = "devops-cluster",
-  }
 }
 
 // ── Proxmox VE guest / cluster / storage metrics (PVE 9 native OTLP) ─────────
