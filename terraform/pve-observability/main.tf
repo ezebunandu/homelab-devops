@@ -66,6 +66,19 @@ resource "null_resource" "alloy_pve" {
     agent = true
   }
 
+  # Create /etc/alloy BEFORE the file provisioners run — Terraform's file
+  # provisioner does not create parent directories, so without this the configs
+  # get written to a regular file literally named /etc/alloy. Also clears that
+  # stray file if a prior failed run left one behind (mkdir -p can't replace it).
+  provisioner "remote-exec" {
+    inline = [
+      "set -eu",
+      "[ -f /etc/alloy ] && rm -f /etc/alloy || true",
+      "mkdir -p /etc/alloy /var/lib/alloy",
+      "chmod 700 /etc/alloy",
+    ]
+  }
+
   # Write Grafana Cloud credentials as an env file.
   # The systemd unit references this via EnvironmentFile= so values never
   # appear in the Alloy config or in process arguments.
@@ -97,8 +110,6 @@ resource "null_resource" "alloy_pve" {
   provisioner "remote-exec" {
     inline = [
       "set -euo pipefail",
-      "mkdir -p /etc/alloy /var/lib/alloy",
-      "chmod 700 /etc/alloy",
       "# Install binary if version differs",
       "INSTALLED=$(alloy --version 2>/dev/null | awk '{print $3}' || echo none)",
       "TARGET=v${var.alloy_version}",
