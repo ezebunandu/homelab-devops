@@ -100,7 +100,7 @@ Home LAN (192.168.57.0/24)
 | GitLab + Runner | 🟡 Planned (DC-6/7) | Self-hosted; replaces GitHub for `homelab-platform` once live |
 | Renovate | 🟡 Planned (DC-10) | Scheduled GitLab pipeline, 7-day stability window |
 | PVE-host observability | ✅ Live | Per-host Alloy ships node_exporter host metrics + journald logs, plus PVE 9's native OTLP push (`proxmox_*` guest/storage/node series) into the same local Alloy → Grafana Cloud. One write-only Grafana Cloud access-policy token, minted as code via the Grafana Terraform provider. Verified Jun 2026: both metric sources + logs landing for all three nodes. |
-| In-cluster K8s observability | ❌ Separately broken, separately scoped | Existing Alloy DaemonSet stuck `0/2 ContainerCreating` since deployment. **Different project from PVE-host observability** — separate config, separate scrape targets (kube-state-metrics, cAdvisor, pod logs), separate cost profile against the Grafana Cloud free tier. Tackled after PVE-host observability and GitLab are live. |
+| In-cluster K8s observability | ✅ Live | Grafana `k8s-monitoring` chart (v4.1.7) in the `monitoring` ns via ArgoCD — Alloy collectors + kube-state-metrics + node-exporter. Metrics (workload, node, and control-plane: apiserver/scheduler/controller-manager/CoreDNS) + logs (pod logs + cluster events) → Grafana Cloud, `cluster="homelab-talos"`. Ingest token minted as code (`terraform/grafana-cloud/`) → Vault → ExternalSecret. Replaced the earlier broken standalone Alloy DaemonSet. etcd metrics deferred. |
 | Tailscale (zero-trust remote access) | 🟡 Planned (greenfield) | Terraform drafted; never applied |
 | Backups | 🟡 Partial | Per-VM `vzdump`, data-level `scripts/traefik-backup.sh`. No Velero yet. |
 
@@ -111,8 +111,7 @@ In priority order:
 1. **Tailscale rollout** — provision Vault secret, apply `terraform/tailscale/`, approve subnet route. ~2 hours. Useful as a precondition for the next items (remote debugging when something acts up).
 2. **GitLab + Runner** (DC-6/7) — deploy via Helm, MetalLB IP `.102`, Traefik route, migrate `homelab-platform` repo from GitHub to in-lab GitLab. Unblocks Renovate (DC-10) and the full CI → Harbor → ArgoCD loop running on self-hosted infrastructure.
 3. **Stabilize Longhorn capacity** — add CP-toleration to Longhorn's `instance-manager` DaemonSet, unstrand the 300 GB of CP-attached Longhorn disks. Restores Harbor to 3/3 replicas. Can be picked up in parallel with any of the above.
-4. **Talos node resizes** — post-MS-A2-migration follow-up: bump `talos-02`/`talos-03` CPs to 12 GB, `talos-05`/`talos-06` workers to 16 GB. One-at-a-time maintenance.
-5. **In-cluster K8s observability** (distinct from the now-live PVE-host observability) — rebuild the broken Alloy DaemonSet, this time with metric/log allowlists scoped to fit the Grafana Cloud free tier. Sequenced after GitLab so the lab is observable end-to-end when first-party workloads start landing.
+4. **Talos node resizes** — post-MS-A2-migration follow-up: bump `talos-02`/`talos-03` CPs to 12 GB, `talos-05`/`talos-06` workers to 16 GB. One-at-a-time maintenance. (Also pending: resize `talos-04` to the intended 8 vCPU / 28 GB — currently pinned to its post-recreate 2/8 size in `terraform/talos-cluster/variables.tf`.)
 
 ## Backlog — picked up as cycles allow
 
@@ -121,7 +120,7 @@ Smaller items captured during the MS-A2 migration that aren't blocking but shoul
 - **Automate Talos image staging on PVE nodes** — add a `proxmox_virtual_environment_download_file` resource to `terraform/talos-cluster/` so the Talos cloud image is on every PVE node automatically. Currently has to be `scp`'d manually when a node is rebuilt or added. Pattern exists in `terraform/traefik-vm/main.tf` (`resource "proxmox_virtual_environment_download_file" "debian_12"`).
 - **Implement workload-tier scheduling hints** — without `workload-tier=heavy` labels + soft `nodeAffinity`, the scheduler may place heavy pods (GitLab, Harbor) on slim workers when capacity is tight, defeating the asymmetric topology. Label `talos-04` as `heavy`, tag the others `storage`, optionally taint slim workers `PreferNoSchedule`.
 - **Tiered Longhorn StorageClasses** — add a `longhorn-fast` class with `numberOfReplicas: 1` pinned to MS-A2 via `diskSelector` for ephemeral/scratch volumes (CI caches, build scratch). Keep `longhorn-ha` (`numberOfReplicas: 3`) as the default. Lets ephemeral data exploit MS-A2's NVMe without paying the 3-replica HA cost.
-- **MS-A2 M.2 slot 2 expansion** — the MS-A2 has 3 M.2 slots; only one is currently populated. Adding a 2–4 TB drive in slot 2 and dedicating it to Longhorn data (separate from VM system disks) would isolate rebuild I/O and unblock the in-cluster observability and any future workloads that need real storage. Currently deferred (cost).
+- **MS-A2 M.2 slot 2 expansion** — the MS-A2 has 3 M.2 slots; only one is currently populated. Adding a 2–4 TB drive in slot 2 and dedicating it to Longhorn data (separate from VM system disks) would isolate rebuild I/O for any future workloads that need real storage. Currently deferred (cost).
 
 ## Beyond M2
 
@@ -145,6 +144,7 @@ homelab-devops/
 │   ├── traefik-vm/                 M1 — edge VM
 │   ├── talos-cluster/              M2 — 6-node Talos cluster
 │   ├── pve-observability/          M2 — Alloy on PVE hosts: node_exporter + PVE 9 OTLP push → Grafana Cloud (live)
+│   ├── grafana-cloud/              M2 — central Grafana Cloud ingest credentials (write-only tokens) minted as code → Vault
 │   ├── tailscale/                  M2 — Tailscale (drafted; not yet applied)
 │   └── scratch-vm/                 ad-hoc scratch VM for one-off experiments
 └── scripts/

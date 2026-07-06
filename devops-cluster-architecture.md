@@ -29,7 +29,7 @@ This doc is M2 — it assumes M1 is complete.
 | Deployment model | Jsonnet/Tanka (first-party) + Helm (third-party) | DRY where it pays; don't re-author vendor charts |
 | Config language | Jsonnet everywhere — no YAML in source | Consistency; real programming language |
 | GitOps controller | ArgoCD, per-cluster, one shared repo | No cross-cluster auth gymnastics |
-| Observability | Grafana Alloy → Grafana Cloud | Saves ~8 GB RAM + ops burden; WAN dep accepted |
+| Observability | Grafana Alloy → Grafana Cloud (in-cluster: `k8s-monitoring` chart; PVE hosts: per-host Alloy) | Saves ~8 GB RAM + ops burden; WAN dep accepted |
 | Secrets | Vault in-cluster, manual unseal | Standard homelab pattern |
 | Image promotion | `crane copy` in GitLab CI (push-based) | CI stays the source of truth |
 | Dependency automation | Renovate via GitLab CI scheduled pipeline, 7-day stability window | Reuses runner infra; supply-chain hygiene |
@@ -130,7 +130,7 @@ longhorn-system    longhorn
 argocd             argocd (syncs everything below)
 cert-manager       cert-manager (optional in edge-TLS topology)
 external-secrets   external-secrets-operator → vault backend
-observability      grafana-alloy (ships to Grafana Cloud)
+monitoring         k8s-monitoring chart — Alloy (metrics/logs/singleton) + kube-state-metrics + node-exporter → Grafana Cloud
 vault              vault (3 replicas, raft, manual unseal)
 registry           harbor
 gitlab             gitlab + its MinIO
@@ -146,7 +146,7 @@ gitlab-runners     gitlab-runner (k8s executor, spawns per-job pods)
 | MetalLB | 0.2 GB |
 | ArgoCD | 1 GB |
 | cert-manager, external-secrets | 0.5 GB |
-| Grafana Alloy | 1 GB |
+| k8s-monitoring (Alloy ×3 + kube-state-metrics + node-exporter) | ~1.5 GB |
 | Vault | 2 GB |
 | Harbor | 6 GB |
 | GitLab + MinIO | 10 GB |
@@ -155,6 +155,19 @@ gitlab-runners     gitlab-runner (k8s executor, spawns per-job pods)
 | **Committed** | **~31 GB** |
 | **Cluster budget (current: 66 GB)** | **~35 GB headroom** post-MS-A2 swap |
 | **Cluster budget (after pending CP+slim-worker resizes: 82 GB)** | ~51 GB headroom |
+
+## Observability
+
+Two independent telemetry sources ship to the same Grafana Cloud stack, each with its own write-only ingest token (so either can be revoked/rotated in isolation):
+
+- **In-cluster (Talos):** the Grafana `k8s-monitoring` Helm chart (v4.1.7) in the `monitoring` namespace, deployed via ArgoCD. Three Alloy collectors — `alloy-metrics` (Deployment), `alloy-logs` (DaemonSet, all nodes incl. control plane via a CP toleration), `alloy-singleton` — plus bundled kube-state-metrics and node-exporter. Metrics: kubelet, cAdvisor, kube-state-metrics, node-exporter, and control-plane (apiserver, scheduler, controller-manager, CoreDNS). Logs: pod logs + cluster events → Loki. Labelled `cluster="homelab-talos"`.
+- **PVE hosts:** per-host Alloy (systemd) shipping node_exporter + PVE 9 OTLP guest/storage metrics + journald logs. Labelled `cluster="devops-cluster"`. See `terraform/pve-observability/`.
+
+**Credentials, as code.** `terraform/grafana-cloud/` mints a write-only Grafana Cloud access policy + token (`metrics:write`, `logs:write`) for the k8s source and writes it — with the shared, push-suffixed endpoints — to Vault at `secret/platform/grafana-cloud-k8s`. In-cluster, an ExternalSecret (ClusterSecretStore `vault`) materialises the `grafana-cloud-credentials` Secret in `monitoring`; the chart's collectors read it via env injection (`collectors.<name>.alloy.extraEnv` → `sys.env(...)` in each destination). No credential is committed to git. Rotate with `terraform apply -replace=grafana_cloud_access_policy_token.k8s`.
+
+**Control-plane metrics** require Talos to expose controller-manager (`:10257`) and scheduler (`:10259`) off localhost — `controllerManager`/`scheduler` `extraArgs: bind-address=0.0.0.0` in the control-plane machineconfig (`terraform/talos-cluster/talos.tf`); enabled chart-side by `clusterMetrics.controlPlane.enabled: true`. apiserver (`:6443`) and CoreDNS need no Talos change. **etcd metrics are not yet collected** — the chart has no etcd scraper in 4.1.7; it needs a custom scrape job plus exposing etcd's `:2381` metrics port (deferred).
+
+Starter dashboards: Node Exporter Full (1860), dotdc Kubernetes Views (15757–15760), API Server (15761), CoreDNS (15762).
 
 ## Edge integration — Traefik VM stays
 
@@ -203,10 +216,10 @@ Two paths, chosen per component:
 
 | Component | Tool | Reason |
 |---|---|---|
-| Vendor charts (GitLab, Harbor, Vault, Longhorn, MetalLB, Cilium, ArgoCD, cert-manager) | Helm via ArgoCD multi-source (`source.chart` + values overlay from `homelab-platform` repo) | Don't re-author vendor charts |
-| Grafana Alloy config, per-env tweaks, home-automation workloads | Tanka environments (jsonnet) — deferred until first-party workloads exist | Real templating where it pays |
+| Vendor charts (GitLab, Harbor, Vault, Longhorn, MetalLB, Cilium, ArgoCD, cert-manager, k8s-monitoring) | Helm via ArgoCD multi-source (`source.chart` + values overlay from `homelab-platform` repo) | Don't re-author vendor charts |
+| Per-env tweaks, home-automation workloads | Tanka environments (jsonnet) — deferred until first-party workloads exist | Real templating where it pays |
 
-Platform services use YAML values files in `homelab-platform/apps/<service>/values.yaml`, referenced via ArgoCD's multi-source `$values` ref. Tanka will be introduced when first-party workloads (Alloy config, GitLab Runner) need real templating.
+Platform services use YAML values files in `homelab-platform/apps/<service>/values.yaml`, referenced via ArgoCD's multi-source `$values` ref. Tanka will be introduced when first-party workloads (e.g. GitLab Runner, home-automation) need real templating. (The Alloy config is no longer hand-authored — it's rendered by the `k8s-monitoring` chart.)
 
 ## GitOps repo structure
 
@@ -224,8 +237,9 @@ homelab-platform/
 │       ├── vault.yaml             wave 2
 │       ├── harbor.yaml            wave 3
 │       ├── gitlab.yaml            wave 3
-│       ├── grafana-alloy.yaml     wave 4
-│       └── renovate.yaml          wave 4
+│       ├── k8s-monitoring-secrets.yaml  wave 4   (monitoring ns + Grafana Cloud ExternalSecret)
+│       ├── k8s-monitoring.yaml          wave 5   (Grafana k8s-monitoring chart)
+│       └── renovate.yaml                wave 4
 ├── apps/
 │   └── <service>/
 │       └── values.yaml            Helm values overlay (referenced via ArgoCD $values ref)
@@ -311,8 +325,9 @@ Imperative bootstrap (Terraform + CLI), then GitOps takes over.
 7. **Deploy GitLab** — root password from Vault, Longhorn PVCs, MetalLB IP `.102`, Traefik route, migrate `homelab-platform` repo from GitHub
 8. **Add remaining Traefik routes** — vault, harbor, gitlab (ArgoCD route already live)
 9. **Configure Renovate** — scheduled pipeline + `renovate.json` in the gitops repo; group-scoped GitLab token in Vault
+10. ✅ **Cluster observability** — Grafana `k8s-monitoring` chart in `monitoring`; workload + node + control-plane metrics and pod logs + cluster events → Grafana Cloud. Ingest token minted by `terraform/grafana-cloud/` → Vault → ExternalSecret. (Deployed ahead of GitLab/Renovate; see [Observability](#observability).)
 
-Steps 1–5 complete. Step 6 (Harbor) is deployed but degraded — see open work. Step 7 (GitLab) is next.
+Steps 1–5 complete and cluster observability (step 10) is live. Step 6 (Harbor) is deployed but degraded — see open work. Step 7 (GitLab) is next.
 
 > **Hardware refresh interlude (May 2026):** the `devops` PVE host was swapped from a Dell T3600 to a Minisforum MS-A2 mid-bootstrap, between deploying Vault (DC-5) and finishing Harbor/GitLab (DC-6/7). The cluster came through the swap intact with `talos-01` and `talos-04` recreated on the new hardware; no etcd or Vault data was lost. Operational lessons from the swap are captured in the [Operations notes](#operations-notes--hard-won-lessons) section below.
 
@@ -398,3 +413,11 @@ Tracked as a backlog item in the README — adding a `proxmox_virtual_environmen
 ```bash
 kubectl config set-cluster devops --server=https://192.168.57.21:6443
 ```
+
+### Grafana k8s-monitoring: credential injection and Talos control-plane metrics
+
+Three non-obvious things cost time bringing up the in-cluster `k8s-monitoring` chart (v4.1.7):
+
+- **Destination credentials injected via env need `secret.embed: true`, not `create: false`.** With `create: false` the chart still emits a `remote.kubernetes.secret` component pointing at a chart-named Secret (`<destination>-k8s-monitoring`) it never creates → Alloy crashes with `secret … not found`. `embed: true` inlines the credential refs and drops that component.
+- **`extraEnv` must be nested under `alloy:`** (`collectors.<name>.alloy.extraEnv`), which renders to `spec.alloy.extraEnv` on the Alloy CR. A top-level `extraEnv` is silently ignored by the alloy-operator, so the vars never reach the pod and `sys.env(...)` resolves empty (endpoint fails to build → crashloop).
+- **Control-plane metrics need the endpoints exposed.** controller-manager and scheduler bind `--bind-address=127.0.0.1` by default; set `bind-address=0.0.0.0` via Talos machineconfig. Talos labels its CP static pods `component=kube-{scheduler,controller-manager}`, matching the chart's default selectors (no `selectorLabel` override needed). Sanity-check the render offline before syncing: `helm template … | grep -E 'remote\.kubernetes|url = sys'` — expect no `remote.kubernetes.secret` and quoted `sys.env(...)` endpoints.
