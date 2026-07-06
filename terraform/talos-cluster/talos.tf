@@ -74,6 +74,11 @@ resource "talos_machine_configuration_apply" "node" {
         allowSchedulingOnControlPlanes = false
         network = { cni = { name = "none" } }
         proxy   = { disabled = true }
+        # Expose controller-manager (:10257) and scheduler (:10259) metrics off
+        # localhost so the in-cluster Alloy (k8s-monitoring controlPlane feature)
+        # can scrape them. Applying this restarts those control-plane static pods.
+        controllerManager = { extraArgs = { "bind-address" = "0.0.0.0" } }
+        scheduler         = { extraArgs = { "bind-address" = "0.0.0.0" } }
         # Pin etcd peer URLs to the physical subnet so they survive reboots.
         etcd = { advertisedSubnets = ["192.168.57.0/24"] }
       }
