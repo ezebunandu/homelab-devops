@@ -35,19 +35,26 @@ Create it once and store it in Vault:
 
 1. In the stack: **Administration → Users and access → Service accounts →
    Add**. Use **least privilege** — set **No basic role**, then attach the
-   fixed roles this module actually needs:
-   - **Alerting Writer** (`fixed:alerting.writer`) — alert rules + contact
-     points + notification policy. (Splits into `fixed:alerting.rules:writer` +
-     `fixed:alerting.notifications:writer` if you want to drop silences/instances.)
-   - **Folder Creator** (`fixed:folders:creator`) — to create the "Homelab
-     Alerts" folder and manage the rules in it. (Tighter: pre-create that folder
-     and grant the SA **Edit on just that folder** instead.)
+   fixed roles this module actually needs. NB: the Terraform provider manages
+   alerting via the **provisioning API** (`/api/v1/provisioning/*`), which is
+   gated by `alert.provisioning:*` — NOT the interactive alerting permissions.
+   So the required roles are:
+   - **Alerting Provisioning Writer** (`fixed:alerting.provisioning:writer`) —
+     grants `alert.provisioning:read`/`write` for contact points, the
+     notification policy, and rule groups. (The interactive `fixed:alerting.writer`
+     does **not** cover the provisioning API — using it fails with 403 on
+     `POST /v1/provisioning/contact-points`.)
+   - **Folder Writer** (`fixed:folders:writer`) — create **and read** the
+     "Homelab Alerts" folder. (`fixed:folders:creator` alone lacks `folders:read`
+     and fails the folder GET with 403.)
+   - Only if a later plan shows a perpetual diff on the secret webhook URLs, add
+     **Alerting Provisioning Secrets Reader**
+     (`fixed:alerting.provisioning.secrets:reader`) so the provider can read
+     secret contact-point fields back to compare.
 
    Admin/Editor are **not** required — the module only touches alerting + one
    folder, reads no datasources (the UID is a var), and touches no dashboards,
-   users, or org settings. Note contact points + the notification policy are
-   org-global singletons, so org-level alerting-notifications write is the
-   irreducible floor. Then **Add token** and copy it.
+   users, or org settings. Then **Add token** and copy it.
 2. Store it, plus the stack's Grafana URL, in the existing Vault secret:
    ```bash
    vault kv patch secret/grafana-cloud \
@@ -79,43 +86,3 @@ terraform apply \
   OnCall heartbeat, Better Uptime…). It must alarm when pings **stop**; a Discord
   webhook won't work directly, because the signal is absence. Configure the
   heartbeat service to notify your Discord on a missed check.
-
-## Deployment precedence
-
-Two orderings matter here, and they're independent.
-
-### Apply order (Terraform dependency graph)
-
-Terraform derives this from resource references, not file order:
-
-1. `data.vault_kv_secret_v2.grafana_cloud` is read first — the `grafana`
-   provider is configured from it (`stack_url` + `stack_sa_token`), so nothing
-   Grafana-side can run until Vault resolves and returns the secret. This is why
-   `vault.lab.hezebonica.ca` must be resolving before you apply.
-2. In parallel: the `Homelab Alerts` folder and both contact points
-   (`homelab-default`, `homelab-deadmansswitch`) — none depend on each other.
-3. `grafana_notification_policy.root` — waits on **both** contact points (it
-   references their `.name`).
-4. `grafana_rule_group.homelab` — waits on the folder (`folder_uid`).
-
-### Routing precedence (which policy wins)
-
-The notification policy tree is evaluated top-down; the most specific matching
-child wins and can terminate routing:
-
-- `DeadMansSwitch` matches the child policy → routed to
-  `homelab-deadmansswitch` (the heartbeat webhook) **only**. `continue = false`
-  stops evaluation there, so it never falls through to Discord.
-- Every other alert matches no child → falls through to the root default
-  (`homelab-default`) → Discord.
-
-Presence-based infra alerts go to Discord; the absence-based dead-man's-switch
-goes to the one receiver that can detect silence.
-
-## Notes
-
-- `grafana_notification_policy` is a **singleton** — it replaces the stack's
-  root notification policy tree. Fine for a single-tenant homelab; be aware if
-  you later hand-edit routing in the UI (Terraform will revert it).
-- Resources created here are provenance-marked, so they're read-only in the
-  Grafana UI (edit them in Terraform).
