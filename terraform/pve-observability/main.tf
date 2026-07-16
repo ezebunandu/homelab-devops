@@ -38,6 +38,37 @@ locals {
     })
   }
 
+  # Baseline auditd ruleset, Sigma linux_auditd-oriented. Execve is the backbone
+  # of most TTP detections (high volume, accepted — Grafana Cloud Pro). Watches
+  # cover identity, sudo, ssh, kernel modules, cron/persistence, and time.
+  audit_rules = <<-EOT
+    ## Homelab baseline audit ruleset — managed by terraform/pve-observability
+    -D
+    -b 8192
+    -f 1
+    ## Identity / auth
+    -w /etc/passwd -p wa -k identity
+    -w /etc/shadow -p wa -k identity
+    -w /etc/group -p wa -k identity
+    -w /etc/sudoers -p wa -k identity
+    -w /etc/sudoers.d/ -p wa -k identity
+    -w /etc/ssh/sshd_config -p wa -k sshd
+    ## Privilege escalation (execve where euid=0 but uid differs)
+    -a always,exit -F arch=b64 -S execve -C uid!=euid -F euid=0 -k privesc
+    ## Process execution
+    -a always,exit -F arch=b64 -S execve -k exec
+    -a always,exit -F arch=b32 -S execve -k exec
+    ## Kernel modules
+    -a always,exit -F arch=b64 -S init_module,finit_module,delete_module -k modules
+    -w /sbin/insmod -p x -k modules
+    -w /sbin/modprobe -p x -k modules
+    ## Cron / persistence
+    -w /etc/crontab -p wa -k cron
+    -w /etc/cron.d/ -p wa -k cron
+    ## Time changes
+    -a always,exit -F arch=b64 -S adjtimex,settimeofday -k time
+  EOT
+
   # Hash of all Grafana Cloud credential values — triggers re-provisioning on
   # rotation. The single write token is sourced from the minted access policy,
   # so replacing the token resource re-provisions every host automatically.
@@ -57,6 +88,7 @@ resource "null_resource" "alloy_pve" {
     alloy_version    = var.alloy_version
     config_hash      = sha256(local.alloy_configs[each.key])
     credentials_hash = local.credentials_hash
+    audit_rules_hash = sha256(local.audit_rules)
   }
 
   connection {
@@ -76,6 +108,27 @@ resource "null_resource" "alloy_pve" {
       "[ -f /etc/alloy ] && rm -f /etc/alloy || true",
       "mkdir -p /etc/alloy /var/lib/alloy",
       "chmod 700 /etc/alloy",
+      "# Install auditd so /etc/audit/rules.d exists before the rules file lands.",
+      "command -v auditctl >/dev/null 2>&1 || { apt-get update -qq || true; DEBIAN_FRONTEND=noninteractive apt-get install -y -qq auditd; }",
+    ]
+  }
+
+  # Baseline audit ruleset → auditd loads everything under /etc/audit/rules.d.
+  provisioner "file" {
+    content     = local.audit_rules
+    destination = "/etc/audit/rules.d/homelab.rules"
+  }
+
+  # Load the ruleset and ensure auditd is running/enabled. augenrules compiles
+  # rules.d into the active policy; auditd must be restarted (not reloaded) to
+  # pick up new watches/syscall rules.
+  provisioner "remote-exec" {
+    inline = [
+      "set -euo pipefail",
+      "augenrules --load",
+      "systemctl enable auditd",
+      "systemctl restart auditd",
+      "auditctl -l >/dev/null || { echo 'auditd rules failed to load'; exit 1; }",
     ]
   }
 

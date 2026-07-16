@@ -101,6 +101,30 @@ loki.relabel "journal" {
   }
 }
 
+// ── auditd security logs (Sigma linux_auditd source) ───────
+// auditd writes raw audit records to /var/log/audit/audit.log (root-only; Alloy
+// runs as root). Shipped verbatim — the Sigma→Loki pipeline parses the records.
+// Labels are stamped via loki.process.static_labels so the Sigma pipeline can
+// select {service="auditd"}.
+loki.source.file "auditd" {
+  targets    = [{ __path__ = "/var/log/audit/audit.log" }]
+  forward_to = [loki.process.auditd.receiver]
+}
+
+loki.process "auditd" {
+  stage.static_labels {
+    values = {
+      job      = "pve-auditd",
+      service  = "auditd",
+      product  = "linux",
+      instance = "${hostname}",
+      cluster  = "devops-cluster",
+    }
+  }
+
+  forward_to = [loki.write.grafana_cloud.receiver]
+}
+
 // ── Grafana Cloud — Prometheus remote write ─────────────────
 prometheus.remote_write "grafana_cloud" {
   endpoint {
