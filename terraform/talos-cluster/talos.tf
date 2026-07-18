@@ -81,6 +81,32 @@ resource "talos_machine_configuration_apply" "node" {
         scheduler         = { extraArgs = { "bind-address" = "0.0.0.0" } }
         # Pin etcd peer URLs to the physical subnet so they survive reboots.
         etcd = { advertisedSubnets = ["192.168.57.0/24"] }
+        # Kube-apiserver audit logging is on by default (confirmed: Talos
+        # writes /var/log/audit/kube/kube-apiserver.log, rotating on its own)
+        # under its built-in catch-all Metadata policy. Replace it with a
+        # scoped policy for the security-log-onboarding effort (homelab
+        # security-detection-plan.md, A2): drop noisy get/list/watch, capture
+        # exec/attach at full fidelity, and keep Metadata-level records for
+        # secrets/serviceaccounts/RBAC mutations. `auditPolicy` replaces
+        # wholesale on merge, so this must be the complete desired rule set.
+        apiServer = {
+          auditPolicy = {
+            apiVersion = "audit.k8s.io/v1"
+            kind       = "Policy"
+            omitStages = ["RequestReceived"]
+            rules = [
+              { level = "None", verbs = ["get", "list", "watch"] },
+              { level = "RequestResponse", resources = [
+                { group = "", resources = ["pods/exec", "pods/attach", "pods/portforward"] }
+              ] },
+              { level = "Metadata", resources = [
+                { group = "", resources = ["secrets", "serviceaccounts"] },
+                { group = "rbac.authorization.k8s.io", resources = ["roles", "rolebindings", "clusterroles", "clusterrolebindings"] }
+              ] },
+              { level = "Metadata" },
+            ]
+          }
+        }
       }
     })] : [],
 
