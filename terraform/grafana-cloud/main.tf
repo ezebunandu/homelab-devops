@@ -57,6 +57,11 @@ resource "vault_kv_secret_v2" "k8s_grafana_cloud" {
     metrics_username = data.vault_kv_secret_v2.grafana_cloud.data["metrics_username"]
     logs_url         = data.vault_kv_secret_v2.grafana_cloud.data["logs_url"]
     logs_username    = data.vault_kv_secret_v2.grafana_cloud.data["logs_username"]
-    token            = grafana_cloud_access_policy_token.k8s.token
+    # Host-only variant (no /loki/api/v1/push suffix) for consumers that split
+    # host and path themselves — falcosidekick's LOKI_HOSTPORT expects
+    # scheme://host:port and appends its own `endpoint` (default the same
+    # suffix), so feeding it the full push URL would double the path.
+    logs_host = replace(data.vault_kv_secret_v2.grafana_cloud.data["logs_url"], "/loki/api/v1/push", "")
+    token     = grafana_cloud_access_policy_token.k8s.token
   })
 }
