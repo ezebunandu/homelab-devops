@@ -96,6 +96,14 @@ resource "talos_machine_configuration_apply" "node" {
             omitStages = ["RequestReceived"]
             rules = [
               { level = "None", verbs = ["get", "list", "watch"] },
+              # Leader-election churn (kube-scheduler, kube-controller-manager,
+              # cert-manager, ArgoCD, Cilium, external-secrets, ...) renews
+              # every few seconds per lease and carries no security signal.
+              # Confirmed via {service="kube-audit"} volume breakdown — this
+              # was the dominant contributor by a wide margin post-deploy.
+              { level = "None", resources = [
+                { group = "coordination.k8s.io", resources = ["leases"] }
+              ] },
               { level = "RequestResponse", resources = [
                 { group = "", resources = ["pods/exec", "pods/attach", "pods/portforward"] }
               ] },

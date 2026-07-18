@@ -1,0 +1,15 @@
+# Terraform
+.terraform/
+*.tfstate
+*.tfstate.backup
+*.tfplan
+.terraform.lock.hcl
+
+# Secrets
+*.pem
+*.key
+secrets.auto.tfvars
+
+# Backups (may contain acme.json, htpasswd hashes, etc.)
+backups/
+scripts/backups/
