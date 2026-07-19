@@ -74,12 +74,18 @@ export VAULT_TOKEN=<token>
 terraform init
 terraform apply \
   -var 'prometheus_datasource_uid=<mimir-ds-uid>' \
+  -var 'loki_datasource_uid=<loki-ds-uid>' \
   -var 'discord_webhook_url=https://discord.com/api/webhooks/<id>/<token>' \
   -var 'deadmansswitch_webhook_url=https://hc-ping.com/<uuid>'
 ```
 
 - `prometheus_datasource_uid` — Connections → Data sources in the stack
   (e.g. `grafanacloud-<org>-prom`).
+- `loki_datasource_uid` — same page (e.g. `grafanacloud-<org>-logs`). Used by
+  the "Security Detections" folder's native Falco rule; the same UID also
+  goes into `homelab-detections`' `config.yml` for the Sigma-provisioned
+  rules. After apply, `terraform output security_detections_folder_id` gives
+  the numeric folder ID that config.yml's `integration.folder_id` needs.
 - `discord_webhook_url` — a Discord channel webhook (Server Settings →
   Integrations → Webhooks). Real alerts post here.
 - `deadmansswitch_webhook_url` — a heartbeat check URL (healthchecks.io, Grafana

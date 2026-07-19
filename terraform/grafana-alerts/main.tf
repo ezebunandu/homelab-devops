@@ -60,6 +60,95 @@ resource "grafana_notification_policy" "root" {
     repeat_interval = "5m"
     continue        = false
   }
+
+  # Security detections: Sigma-provisioned rules (homelab-detections repo,
+  # labelled source="sigma" via config.yml's integration.template_labels) and
+  # the native Falco rule below (labelled source="falco") share this route —
+  # one exit path to the same Discord contact point as everything else.
+  policy {
+    matcher {
+      label = "source"
+      match = "=~"
+      value = "sigma|falco"
+    }
+    contact_point = grafana_contact_point.default.name
+    continue      = false
+  }
+}
+
+# ── Security Detections (Loki-backed) ─────────────────────────────────────────
+# Separate folder + rule group from "Homelab Alerts" above — different
+# datasource (Loki, not Prometheus) and a distinct source: this is where
+# Sigma-provisioned rules (homelab-detections repo) land, plus the one native
+# rule below for Falco, which uses its own rule engine, not Sigma.
+resource "grafana_folder" "security_detections" {
+  title = "Security Detections"
+}
+
+resource "grafana_rule_group" "security_detections" {
+  name             = "security-detections-native"
+  folder_uid       = grafana_folder.security_detections.uid
+  interval_seconds = 60
+
+  # Falco findings exit through the same folder/notification path as Sigma
+  # detections (security-detection-plan.md B5) via this one thin LogQL rule —
+  # Sigma is not run over Falco's output, Falco already emits detections.
+  rule {
+    name           = "FalcoCriticalOrErrorFinding"
+    condition      = "C"
+    for            = "0s"
+    no_data_state  = "NoData"
+    exec_err_state = "Error"
+
+    data {
+      ref_id         = "A"
+      datasource_uid = var.loki_datasource_uid
+      relative_time_range {
+        from = 600
+        to   = 0
+      }
+      model = jsonencode({
+        refId         = "A"
+        expr          = "count_over_time({product=\"falco\"} | json | priority=~\"Critical|Error|Warning\" [5m])"
+        instant       = true
+        range         = false
+        editorMode    = "code"
+        intervalMs    = 1000
+        maxDataPoints = 43200
+      })
+    }
+    data {
+      ref_id         = "B"
+      datasource_uid = "__expr__"
+      relative_time_range {
+        from = 600
+        to   = 0
+      }
+      model = jsonencode({
+        refId      = "B"
+        type       = "reduce"
+        expression = "A"
+        reducer    = "last"
+      })
+    }
+    data {
+      ref_id         = "C"
+      datasource_uid = "__expr__"
+      relative_time_range {
+        from = 600
+        to   = 0
+      }
+      model = jsonencode({
+        refId      = "C"
+        type       = "threshold"
+        expression = "B"
+        conditions = [{ evaluator = { type = "gt", params = [0] } }]
+      })
+    }
+
+    labels      = { severity = "critical", source = "falco" }
+    annotations = { summary = "Falco reported a Critical/Error/Warning finding in the last 5m." }
+  }
 }
 
 # ── Rule group ────────────────────────────────────────────────────────────────

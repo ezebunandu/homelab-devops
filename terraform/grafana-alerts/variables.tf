@@ -9,6 +9,11 @@ variable "prometheus_datasource_uid" {
   type        = string
 }
 
+variable "loki_datasource_uid" {
+  description = "UID of the stack's Grafana Cloud Loki datasource — the Security Detections rule group queries it (Falco native alert; Sigma-provisioned rules query it too, via homelab-detections' config.yml). Find it under Connections → Data sources (e.g. 'grafanacloud-<org>-logs')."
+  type        = string
+}
+
 variable "discord_webhook_url" {
   description = "Discord webhook URL that real alerts (node/pod/PV/target) are posted to."
   type        = string
