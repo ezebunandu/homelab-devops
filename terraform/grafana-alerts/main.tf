@@ -448,4 +448,314 @@ resource "grafana_rule_group" "homelab" {
     labels      = { severity = "critical" }
     annotations = { summary = "A control-plane scrape target (apiserver/scheduler/controller-manager) has been down for 10m." }
   }
+
+  # ── Proxmox host hardware/operational alerts ─────────────────────────────
+  # PVE hosts push node_exporter-equivalent metrics via the Alloy
+  # prometheus.exporter.unix component (terraform/pve-observability) with no
+  # set_collectors override, so hwmon/thermal/cpu/meminfo/diskstats are all
+  # enabled by default (confirmed against Alloy's own docs). Every query is
+  # scoped to cluster="devops-cluster" specifically, since Talos nodes expose
+  # the *same* node_exporter metric names via k8s-monitoring's hostMetrics
+  # feature under cluster="homelab-talos" — without this scope these would
+  # silently blend PVE hosts and k8s nodes together.
+
+  # A CPU/board/NVMe sensor is reporting a high temperature. Unions hwmon +
+  # thermal_zone (ACPI) so this reflects the same full picture as the
+  # existing "Node Thermal Monitoring" dashboard, not just one metric source.
+  # Thresholds calibrated against real live data (2026-07-20): the MS-A2
+  # (devops) normally peaks ~73.5°C, the two Lenovo M910qs (devops2/devops3)
+  # normally run cooler at 62-65°C. Unscoped across all sensors per instance
+  # (chip/sensor labels vary by hardware, and NVMe drives legitimately run
+  # warm) -- tighten to specific sensors if a particular one proves noisy.
+  rule {
+    name           = "PVEHostCPUTemperatureWarning"
+    condition      = "C"
+    for            = "10m"
+    no_data_state  = "NoData"
+    exec_err_state = "Error"
+
+    data {
+      ref_id         = "A"
+      datasource_uid = var.prometheus_datasource_uid
+      relative_time_range {
+        from = 600
+        to   = 0
+      }
+      model = jsonencode({
+        refId         = "A"
+        expr          = "sum(max by (instance) (node_hwmon_temp_celsius{cluster=\"devops-cluster\"} or node_thermal_zone_temp{cluster=\"devops-cluster\"}) > bool 82)"
+        instant       = true
+        range         = false
+        editorMode    = "code"
+        intervalMs    = 1000
+        maxDataPoints = 43200
+      })
+    }
+    data {
+      ref_id         = "B"
+      datasource_uid = "__expr__"
+      relative_time_range {
+        from = 600
+        to   = 0
+      }
+      model = jsonencode({
+        refId      = "B"
+        type       = "reduce"
+        expression = "A"
+        reducer    = "last"
+      })
+    }
+    data {
+      ref_id         = "C"
+      datasource_uid = "__expr__"
+      relative_time_range {
+        from = 600
+        to   = 0
+      }
+      model = jsonencode({
+        refId      = "C"
+        type       = "threshold"
+        expression = "B"
+        conditions = [{ evaluator = { type = "gt", params = [0] } }]
+      })
+    }
+
+    labels      = { severity = "warning" }
+    annotations = { summary = "A PVE host hardware sensor has been above 82°C for 10m — worth a look, well below throttle margin." }
+  }
+
+  rule {
+    name           = "PVEHostCPUTemperatureCritical"
+    condition      = "C"
+    for            = "5m"
+    no_data_state  = "NoData"
+    exec_err_state = "Error"
+
+    data {
+      ref_id         = "A"
+      datasource_uid = var.prometheus_datasource_uid
+      relative_time_range {
+        from = 600
+        to   = 0
+      }
+      model = jsonencode({
+        refId         = "A"
+        expr          = "sum(max by (instance) (node_hwmon_temp_celsius{cluster=\"devops-cluster\"} or node_thermal_zone_temp{cluster=\"devops-cluster\"}) > bool 90)"
+        instant       = true
+        range         = false
+        editorMode    = "code"
+        intervalMs    = 1000
+        maxDataPoints = 43200
+      })
+    }
+    data {
+      ref_id         = "B"
+      datasource_uid = "__expr__"
+      relative_time_range {
+        from = 600
+        to   = 0
+      }
+      model = jsonencode({
+        refId      = "B"
+        type       = "reduce"
+        expression = "A"
+        reducer    = "last"
+      })
+    }
+    data {
+      ref_id         = "C"
+      datasource_uid = "__expr__"
+      relative_time_range {
+        from = 600
+        to   = 0
+      }
+      model = jsonencode({
+        refId      = "C"
+        type       = "threshold"
+        expression = "B"
+        conditions = [{ evaluator = { type = "gt", params = [0] } }]
+      })
+    }
+
+    labels      = { severity = "critical" }
+    annotations = { summary = "A PVE host hardware sensor has been above 90°C for 5m — approaching throttle territory." }
+  }
+
+  # Sustained high CPU utilization (traditional %busy, not PSI) -- 15m grace
+  # period since PVE hosts running VMs legitimately burst CPU often.
+  rule {
+    name           = "PVEHostCPUUsageHigh"
+    condition      = "C"
+    for            = "15m"
+    no_data_state  = "NoData"
+    exec_err_state = "Error"
+
+    data {
+      ref_id         = "A"
+      datasource_uid = var.prometheus_datasource_uid
+      relative_time_range {
+        from = 600
+        to   = 0
+      }
+      model = jsonencode({
+        refId         = "A"
+        expr          = "sum((100 - (avg by (instance) (rate(node_cpu_seconds_total{cluster=\"devops-cluster\", mode=\"idle\"}[5m])) * 100)) > bool 90)"
+        instant       = true
+        range         = false
+        editorMode    = "code"
+        intervalMs    = 1000
+        maxDataPoints = 43200
+      })
+    }
+    data {
+      ref_id         = "B"
+      datasource_uid = "__expr__"
+      relative_time_range {
+        from = 600
+        to   = 0
+      }
+      model = jsonencode({
+        refId      = "B"
+        type       = "reduce"
+        expression = "A"
+        reducer    = "last"
+      })
+    }
+    data {
+      ref_id         = "C"
+      datasource_uid = "__expr__"
+      relative_time_range {
+        from = 600
+        to   = 0
+      }
+      model = jsonencode({
+        refId      = "C"
+        type       = "threshold"
+        expression = "B"
+        conditions = [{ evaluator = { type = "gt", params = [0] } }]
+      })
+    }
+
+    labels      = { severity = "warning" }
+    annotations = { summary = "A PVE host has been above 90% CPU utilization for 15m." }
+  }
+
+  # Sustained high memory utilization.
+  rule {
+    name           = "PVEHostMemoryUsageHigh"
+    condition      = "C"
+    for            = "15m"
+    no_data_state  = "NoData"
+    exec_err_state = "Error"
+
+    data {
+      ref_id         = "A"
+      datasource_uid = var.prometheus_datasource_uid
+      relative_time_range {
+        from = 600
+        to   = 0
+      }
+      model = jsonencode({
+        refId         = "A"
+        expr          = "sum(((1 - (node_memory_MemAvailable_bytes{cluster=\"devops-cluster\"} / node_memory_MemTotal_bytes{cluster=\"devops-cluster\"})) * 100) > bool 90)"
+        instant       = true
+        range         = false
+        editorMode    = "code"
+        intervalMs    = 1000
+        maxDataPoints = 43200
+      })
+    }
+    data {
+      ref_id         = "B"
+      datasource_uid = "__expr__"
+      relative_time_range {
+        from = 600
+        to   = 0
+      }
+      model = jsonencode({
+        refId      = "B"
+        type       = "reduce"
+        expression = "A"
+        reducer    = "last"
+      })
+    }
+    data {
+      ref_id         = "C"
+      datasource_uid = "__expr__"
+      relative_time_range {
+        from = 600
+        to   = 0
+      }
+      model = jsonencode({
+        refId      = "C"
+        type       = "threshold"
+        expression = "B"
+        conditions = [{ evaluator = { type = "gt", params = [0] } }]
+      })
+    }
+
+    labels      = { severity = "warning" }
+    annotations = { summary = "A PVE host has been above 90% memory utilization for 15m." }
+  }
+
+  # A PVE host's root/local-storage filesystem is under 10% free. Excludes
+  # pseudo-filesystems (same intent as excluding tmpfs from disk pressure
+  # elsewhere) -- real local storage only.
+  rule {
+    name           = "PVEHostDiskSpaceLow"
+    condition      = "C"
+    for            = "15m"
+    no_data_state  = "NoData"
+    exec_err_state = "Error"
+
+    data {
+      ref_id         = "A"
+      datasource_uid = var.prometheus_datasource_uid
+      relative_time_range {
+        from = 600
+        to   = 0
+      }
+      model = jsonencode({
+        refId         = "A"
+        expr          = "sum((node_filesystem_avail_bytes{cluster=\"devops-cluster\", fstype!~\"tmpfs|overlay|squashfs|devtmpfs\"} / node_filesystem_size_bytes{cluster=\"devops-cluster\", fstype!~\"tmpfs|overlay|squashfs|devtmpfs\"}) < bool 0.10)"
+        instant       = true
+        range         = false
+        editorMode    = "code"
+        intervalMs    = 1000
+        maxDataPoints = 43200
+      })
+    }
+    data {
+      ref_id         = "B"
+      datasource_uid = "__expr__"
+      relative_time_range {
+        from = 600
+        to   = 0
+      }
+      model = jsonencode({
+        refId      = "B"
+        type       = "reduce"
+        expression = "A"
+        reducer    = "last"
+      })
+    }
+    data {
+      ref_id         = "C"
+      datasource_uid = "__expr__"
+      relative_time_range {
+        from = 600
+        to   = 0
+      }
+      model = jsonencode({
+        refId      = "C"
+        type       = "threshold"
+        expression = "B"
+        conditions = [{ evaluator = { type = "gt", params = [0] } }]
+      })
+    }
+
+    labels      = { severity = "warning" }
+    annotations = { summary = "A PVE host filesystem has been below 10% free space for 15m." }
+  }
 }
+

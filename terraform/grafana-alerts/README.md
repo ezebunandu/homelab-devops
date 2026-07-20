@@ -11,6 +11,15 @@ already feed.
   if the pings stop, the telemetry pipeline is down.
 - Starter infra alerts: `KubeNodeNotReady`, `KubePodCrashLooping`,
   `KubePersistentVolumeFillingUp`, `KubeControlPlaneTargetDown`.
+- Proxmox host hardware/operational alerts, all scoped to
+  `cluster="devops-cluster"` so they only match PVE hosts, not Talos nodes'
+  own node-exporter metrics (same metric names, under `cluster="homelab-talos"`):
+  - `PVEHostCPUTemperatureWarning`/`Critical` — any hwmon or thermal_zone
+    sensor above 82°C/10m or 90°C/5m. Calibrated against real live data: the
+    MS-A2 (`devops`) normally peaks ~73.5°C, the two Lenovo M910qs
+    (`devops2`/`devops3`) run cooler at 62-65°C.
+  - `PVEHostCPUUsageHigh` (>90% for 15m), `PVEHostMemoryUsageHigh` (>90% for
+    15m), `PVEHostDiskSpaceLow` (<10% free for 15m).
 - A Discord contact point for real alerts + a notification policy that sends the
   DMS to a heartbeat receiver and everything else to Discord.
 
