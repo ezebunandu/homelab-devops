@@ -93,11 +93,21 @@ resource "grafana_rule_group" "security_detections" {
   # Falco findings exit through the same folder/notification path as Sigma
   # detections (security-detection-plan.md B5) via this one thin LogQL rule —
   # Sigma is not run over Falco's output, Falco already emits detections.
+  #
+  # no_data_state = OK (not NoData, unlike the Prometheus rules above/below):
+  # this is a Loki count_over_time query filtered on priority=~Critical|Error|
+  # Warning. When A1-A3's tuning is working (no findings in the last 5m), Loki
+  # returns NO SERIES at all for that filter -- structurally different from a
+  # Prometheus sum() query, which always returns a defined value (even zero)
+  # as long as the base metric exists. Treating that as NoData meant a quiet,
+  # healthy Falco fired a repeating DatasourceNoData alert every ~5m instead
+  # of just... not alerting. "No data" here means "nothing bad happened",
+  # which is the same case DeadMansSwitch already handles this way below.
   rule {
     name           = "FalcoCriticalOrErrorFinding"
     condition      = "C"
     for            = "0s"
-    no_data_state  = "NoData"
+    no_data_state  = "OK"
     exec_err_state = "Error"
 
     data {
