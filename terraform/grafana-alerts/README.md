@@ -85,7 +85,9 @@ terraform apply \
   -var 'prometheus_datasource_uid=<mimir-ds-uid>' \
   -var 'loki_datasource_uid=<loki-ds-uid>' \
   -var 'discord_webhook_url=https://discord.com/api/webhooks/<id>/<token>' \
-  -var 'deadmansswitch_webhook_url=https://hc-ping.com/<uuid>'
+  -var 'deadmansswitch_webhook_url=https://hc-ping.com/<uuid>' \
+  -var 'usage_insights_datasource_uid=<usage-insights-ds-uid>' \
+  -var 'ml_metrics_datasource_uid=<see two-step apply note below>'
 ```
 
 - `prometheus_datasource_uid` — Connections → Data sources in the stack
@@ -96,8 +98,49 @@ terraform apply \
   rules. After apply, `terraform output security_detections_folder_id` gives
   the numeric folder ID that config.yml's `integration.folder_id` needs.
 - `discord_webhook_url` — a Discord channel webhook (Server Settings →
-  Integrations → Webhooks). Real alerts post here.
+  Integrations → Webhooks). Real alerts post here — including the bare
+  query-volume-anomaly ping (see below); the correlator's enriched follow-up
+  (found by polling, not by a pushed webhook — no Tailscale/Funnel involved
+  at all) reuses this same webhook rather than a separate one.
 - `deadmansswitch_webhook_url` — a heartbeat check URL (healthchecks.io, Grafana
   OnCall heartbeat, Better Uptime…). It must alarm when pings **stop**; a Discord
   webhook won't work directly, because the signal is absence. Configure the
   heartbeat service to notify your Discord on a missed check.
+- `usage_insights_datasource_uid` — Connections → Data sources in the stack
+  (e.g. `grafanacloud-<stack>-usage-insights`). The query-volume forecast ML
+  job trains on it.
+- `ml_metrics_datasource_uid` — see the two-step apply note immediately below.
+
+### Two-step apply for the query-volume anomaly rule
+
+`grafanacloud-ml-metrics` (the datasource the anomaly rule reads the
+forecast's `:actual`/`:predicted` series from) is auto-provisioned by Grafana
+Cloud **after** `query_volume_forecast`'s first successful run — its UID
+can't be known before that.
+
+1. Apply just the ML job (any placeholder string works for
+   `ml_metrics_datasource_uid` on this pass, since nothing referencing it is
+   targeted yet):
+   ```bash
+   terraform apply -target=grafana_machine_learning_job.query_volume_forecast \
+     -var 'usage_insights_datasource_uid=<usage-insights-ds-uid>' \
+     -var 'ml_metrics_datasource_uid=placeholder' \
+     ... # plus the other required vars above
+   ```
+2. In Explore, confirm `query_volume_forecast:actual`/`:predicted` series now
+   exist on `grafanacloud-ml-metrics`, and note its UID (Connections → Data
+   sources).
+3. Run the normal full apply with the real `ml_metrics_datasource_uid`.
+
+### Open items to verify at apply time
+
+- The usage-insights LogQL in `query_volume_forecast`'s `query_params.expr`
+  (`eventName="data-request"`, the `job="usage-insights"` label) is
+  unverified against this stack's real schema — check in Explore first.
+- This module no longer mints or uses any OnCall/Funnel resources for the
+  query-volume-anomaly alert — the correlator (deployed via homelab-platform)
+  polls Grafana Cloud's Alerting API for firing `source="query-anomaly"`
+  alerts instead of receiving a pushed webhook. See
+  `docs/query-volume-anomaly-plan.md` in the repo root for the full
+  correlator design and its own required credential
+  (`grafana_stack_alert_reader_token`, minted in `terraform/grafana-cloud`).

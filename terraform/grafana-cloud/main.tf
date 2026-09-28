@@ -65,3 +65,68 @@ resource "vault_kv_secret_v2" "k8s_grafana_cloud" {
     token     = grafana_cloud_access_policy_token.k8s.token
   })
 }
+
+# ── Query-volume anomaly correlator (read-only) ───────────────────────────────
+# Read-scoped policy so the correlator can query usage-insights after an
+# anomaly alert fires. Stack-wide logs:read, not scoped to the usage-insights
+# datasource specifically — Grafana Cloud access policies scope at the stack
+# realm level, not per-datasource (a label_policy selector could narrow this,
+# but usage-insights isn't confirmed to carry a label that would cleanly
+# distinguish it from other log streams).
+# Rotate with:  terraform apply -replace=grafana_cloud_access_policy_token.correlator
+resource "grafana_cloud_access_policy" "correlator" {
+  region       = var.grafana_cloud_region
+  name         = "correlator-read-only"
+  display_name = "Query-volume anomaly correlator (read-only)"
+
+  scopes = ["logs:read"]
+
+  realm {
+    type       = "stack"
+    identifier = var.grafana_cloud_stack_id
+  }
+}
+
+resource "grafana_cloud_access_policy_token" "correlator" {
+  region           = var.grafana_cloud_region
+  access_policy_id = grafana_cloud_access_policy.correlator.policy_id
+  name             = "correlator"
+  display_name     = "Query-volume anomaly correlator"
+}
+
+# Manually pre-seeded secrets this module doesn't mint itself: the Discord
+# webhook the correlator posts enriched alerts to (the same one
+# terraform/grafana-alerts already uses — reused, not a separate webhook),
+# and a stack-level Grafana service account token, SCOPED READ-ONLY to alert
+# state — attach only the "Instances and Silences Reader" fixed role
+# (internal ID fixed:alerting.instances:reader, grants alert.instances:read;
+# confirmed against Grafana's own RBAC fixed-role reference — that's the
+# display name shown in the service account role picker, the internal ID is
+# never shown there directly). Deliberately narrower than grafana-alerts'
+# own stack_sa_token, which has write access to alerting config the
+# correlator never needs. The correlator polls Grafana Cloud's Alerting API
+# with this token to discover firing query-anomaly alerts — no inbound
+# webhook, no Tailscale/Funnel involved at all. Seed once by hand:
+#
+#   vault kv put secret/correlator-bootstrap \
+#     discord_webhook_url=<same URL as grafana-alerts' discord_webhook_url var> \
+#     grafana_stack_alert_reader_token=<read-only stack SA token, see above>
+data "vault_kv_secret_v2" "correlator_bootstrap" {
+  mount = "secret"
+  name  = var.correlator_bootstrap_vault_secret_path
+}
+
+# Write-back to Vault for the homelab-platform ExternalSecret to consume
+# (ClusterSecretStore "vault", remoteRef.key "platform/correlator"). Sole
+# writer of this path.
+resource "vault_kv_secret_v2" "correlator" {
+  mount = "secret"
+  name  = "platform/correlator"
+
+  data_json = jsonencode({
+    token                            = grafana_cloud_access_policy_token.correlator.token
+    stack_url                        = data.vault_kv_secret_v2.grafana_cloud.data["stack_url"]
+    discord_webhook_url              = data.vault_kv_secret_v2.correlator_bootstrap.data["discord_webhook_url"]
+    grafana_stack_alert_reader_token = data.vault_kv_secret_v2.correlator_bootstrap.data["grafana_stack_alert_reader_token"]
+  })
+}

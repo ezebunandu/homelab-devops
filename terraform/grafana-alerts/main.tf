@@ -74,6 +74,24 @@ resource "grafana_notification_policy" "root" {
     contact_point = grafana_contact_point.default.name
     continue      = false
   }
+
+  # Query-volume anomaly. The correlator polls Grafana Cloud for firing
+  # alerts rather than receiving a pushed webhook (no Tailscale/Funnel, no
+  # inbound exposure at all — see docs/query-volume-anomaly-plan.md), so this
+  # is the only notification wiring this alert needs: get a human notified.
+  # Shorter repeat_interval than the root policy's inherited 4h: an
+  # ongoing/recurring spike should keep getting re-flagged, unlike the infra
+  # alerts below where one notification per incident is enough.
+  policy {
+    matcher {
+      label = "source"
+      match = "="
+      value = "query-anomaly"
+    }
+    contact_point   = grafana_contact_point.default.name
+    repeat_interval = "30m"
+    continue        = false
+  }
 }
 
 # ── Security Detections (Loki-backed) ─────────────────────────────────────────
@@ -158,6 +176,110 @@ resource "grafana_rule_group" "security_detections" {
 
     labels      = { severity = "critical", source = "falco" }
     annotations = { summary = "Falco reported a Critical/Error/Warning finding in the last 5m." }
+  }
+}
+
+# ── Query-volume anomaly detection ────────────────────────────────────────────
+# Own folder, deliberately separate from both "Homelab Alerts" (infra/hardware
+# health) and "Security Detections" (Loki-native Sigma/Falco rules) — this
+# rule's mechanics match "Homelab Alerts"'s Prometheus-threshold pattern, but
+# its intent (catching a leaked-token/compromised-account-driven spike) is
+# distinct enough from both to warrant its own home.
+resource "grafana_folder" "query_volume_anomaly" {
+  title = "Query Volume Anomaly"
+}
+
+# Forecasts the stack's own read-query volume straight off usage-insights
+# query-event counts (datasource_type = "loki" is supported — confirmed
+# against the provider's resource schema, not just its docs, which only show
+# Prometheus examples). No need to guess a Prometheus "queries per second"
+# metric name that was never confirmed to exist on this stack's
+# grafanacloud-usage datasource.
+resource "grafana_machine_learning_job" "query_volume_forecast" {
+  name            = "Query Volume Forecast"
+  metric          = "query_volume_forecast"
+  description     = "Forecasts the stack's read-query volume from usage-insights, for anomaly alerting."
+  datasource_type = "loki"
+  datasource_uid  = var.usage_insights_datasource_uid
+
+  # eventName="data-request" and the label set below are carried over from
+  # the original research write-up and UNVERIFIED against this stack's real
+  # usage-insights schema — confirm the exact field names in Explore before
+  # relying on this (plan's open item #1).
+  query_params = {
+    expr = "count_over_time({job=\"usage-insights\"} | logfmt | eventName=\"data-request\" [5m])"
+  }
+
+  training_window = 2592000 # 30d
+}
+
+resource "grafana_rule_group" "query_volume_anomaly" {
+  name             = "query-volume-anomaly"
+  folder_uid       = grafana_folder.query_volume_anomaly.uid
+  interval_seconds = 60
+
+  rule {
+    name = "QueryVolumeAnomaly"
+    # Immediate detection over debounce, deliberately — revisit with a `for`
+    # window (e.g. "5m") if the ML forecast band proves noisy enough to
+    # false-positive once deployed.
+    condition      = "C"
+    for            = "0s"
+    no_data_state  = "NoData"
+    exec_err_state = "Error"
+
+    data {
+      ref_id         = "A"
+      datasource_uid = var.ml_metrics_datasource_uid
+      relative_time_range {
+        from = 600
+        to   = 0
+      }
+      # Confirmed syntax from Grafana Cloud's "Alerting on forecasts" doc:
+      # compare the forecast's :actual series against its own :predicted
+      # upper-bound series, ignoring the ml_forecast label that otherwise
+      # makes the two series' label sets mismatch.
+      model = jsonencode({
+        refId         = "A"
+        expr          = "query_volume_forecast:actual > bool ignoring(ml_forecast) query_volume_forecast:predicted{ml_forecast=\"yhat_upper\"}"
+        instant       = true
+        range         = false
+        editorMode    = "code"
+        intervalMs    = 1000
+        maxDataPoints = 43200
+      })
+    }
+    data {
+      ref_id         = "B"
+      datasource_uid = "__expr__"
+      relative_time_range {
+        from = 600
+        to   = 0
+      }
+      model = jsonencode({
+        refId      = "B"
+        type       = "reduce"
+        expression = "A"
+        reducer    = "last"
+      })
+    }
+    data {
+      ref_id         = "C"
+      datasource_uid = "__expr__"
+      relative_time_range {
+        from = 600
+        to   = 0
+      }
+      model = jsonencode({
+        refId      = "C"
+        type       = "threshold"
+        expression = "B"
+        conditions = [{ evaluator = { type = "gt", params = [0] } }]
+      })
+    }
+
+    labels      = { severity = "warning", source = "query-anomaly" }
+    annotations = { summary = "Read-query volume has crossed the forecast's upper bound." }
   }
 }
 
