@@ -131,6 +131,13 @@ services:
       - "--certificatesresolvers.cloudflare.acme.dnschallenge=true"
       - "--certificatesresolvers.cloudflare.acme.dnschallenge.provider=cloudflare"
       - "--certificatesresolvers.cloudflare.acme.dnschallenge.resolvers=1.1.1.1:53,8.8.8.8:53"
+      # Cloudflare's own edge nodes on this VM's anycast path have been observed
+      # serving stale zone data (EDE 3) for minutes after a record write, so the
+      # local propagation check reliably times out even though the record is
+      # live in Cloudflare's DB the whole time. Skip the local check and let
+      # Let's Encrypt's own (differently-routed) validators be the sole check.
+      - "--certificatesresolvers.cloudflare.acme.dnschallenge.disablepropagationcheck=true"
+      - "--certificatesresolvers.cloudflare.acme.dnschallenge.delaybeforecheck=60"
     labels:
       - traefik.enable=true
       - traefik.http.routers.dashboard.rule=Host(\`${DASHBOARD_HOST}\`)
