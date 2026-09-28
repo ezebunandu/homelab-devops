@@ -425,11 +425,22 @@ resource "grafana_rule_group" "homelab" {
   }
 
   # Pods stuck in CrashLoopBackOff.
+  #
+  # no_data_state = OK: kube_pod_container_status_waiting_reason only emits a
+  # series for a container's CURRENT reason, so when nothing is crash-looping
+  # this filtered query matches zero series -- sum() over zero series is empty,
+  # not 0. Same shape as FalcoCriticalOrErrorFinding above: "no data" here means
+  # "nothing crash-looping", not "the pipeline is broken".
+  #
+  # Caveat: nothing in this file monitors kube-state-metrics itself (unlike
+  # kube-apiserver/scheduler/controller-manager in KubeControlPlaneTargetDown
+  # below). If kube-state-metrics stops being scraped, every query built on its
+  # metrics -- including this one -- goes quietly OK instead of NoData/alerting.
   rule {
     name           = "KubePodCrashLooping"
     condition      = "C"
     for            = "10m"
-    no_data_state  = "NoData"
+    no_data_state  = "OK"
     exec_err_state = "Error"
 
     data {
