@@ -214,8 +214,17 @@ resource "grafana_machine_learning_job" "query_volume_forecast" {
   # entry seen so far. eventName="data-request" (unquoted in the raw
   # logfmt line, e.g. `eventName=data-request`) was already correct — logfmt
   # parsing normalizes quoted/unquoted values the same way.
+  #
+  # sum(...) is required, not cosmetic: `| logfmt` extracts every field on
+  # the line (panelId, dashboardUid, tokenId, duration, ...) as its own
+  # label, so an unaggregated count_over_time produces one series per unique
+  # label combination — with high-cardinality fields like panelId/duration
+  # in the mix, that's close to one series per log line, which blew past
+  # Loki's 5000-series-per-query cap over the 30d training window. sum()
+  # collapses everything to the single total-volume series we actually want
+  # to forecast (total query volume, not broken out per panel/user/token).
   query_params = {
-    expr = "count_over_time({service_name=\"grafana\"} | logfmt | eventName=\"data-request\" [5m])"
+    expr = "sum(count_over_time({service_name=\"grafana\"} | logfmt | eventName=\"data-request\" [5m]))"
   }
 
   training_window = 2592000 # 30d
