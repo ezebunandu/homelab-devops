@@ -240,9 +240,20 @@ resource "grafana_rule_group" "query_volume_anomaly" {
     # Immediate detection over debounce, deliberately — revisit with a `for`
     # window (e.g. "5m") if the ML forecast band proves noisy enough to
     # false-positive once deployed.
-    condition      = "C"
-    for            = "0s"
-    no_data_state  = "NoData"
+    condition = "C"
+    for       = "0s"
+    # no_data_state = OK, not NoData (unlike most Prometheus rules in this
+    # file): observed in testing that grafanacloud-ml-metrics' actual/
+    # predicted series have real gaps in normal operation (the ML job's
+    # forecast-metric publish cadence isn't perfectly continuous), which
+    # otherwise fires a synthetic DatasourceNoData alert every time — it
+    # still carries this rule's source=query-anomaly label, so it routed to
+    # Discord just as noisily as a real firing would, on a condition with no
+    # anomaly meaning at all. Same trade-off already accepted for the Falco
+    # rule below (main.tf:115): if the whole ML/usage-insights pipeline dies
+    # outright, this stays silently OK rather than paging — a known gap, not
+    # a fix for pipeline-health monitoring, just for this exact noise.
+    no_data_state  = "OK"
     exec_err_state = "Error"
 
     data {
