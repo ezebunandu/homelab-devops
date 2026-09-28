@@ -194,7 +194,11 @@ resource "grafana_folder" "query_volume_anomaly" {
 # against the provider's resource schema, not just its docs, which only show
 # Prometheus examples). No need to guess a Prometheus "queries per second"
 # metric name that was never confirmed to exist on this stack's
-# grafanacloud-usage datasource.
+# grafanacloud-usage datasource. datasource_uid is the *UID*, not the display
+# name — for this provisioned datasource they differ (UID has no stack slug:
+# "grafanacloud-usage-insights", vs. display name
+# "grafanacloud-<stack>-usage-insights" — confirmed the hard way, via a
+# "Data source not found" training error).
 resource "grafana_machine_learning_job" "query_volume_forecast" {
   name            = "Query Volume Forecast"
   metric          = "query_volume_forecast"
@@ -202,12 +206,16 @@ resource "grafana_machine_learning_job" "query_volume_forecast" {
   datasource_type = "loki"
   datasource_uid  = var.usage_insights_datasource_uid
 
-  # eventName="data-request" and the label set below are carried over from
-  # the original research write-up and UNVERIFIED against this stack's real
-  # usage-insights schema — confirm the exact field names in Explore before
-  # relying on this (plan's open item #1).
+  # Confirmed against a real usage-insights log line in Explore: this
+  # datasource has no "job" indexed label at all (that was a guess from the
+  # original write-up and matched nothing — the ML job trained "ready" but
+  # warned "No series to train"). The real indexed labels are instance_id,
+  # instance_type, org_id, service_name; service_name="grafana" matches every
+  # entry seen so far. eventName="data-request" (unquoted in the raw
+  # logfmt line, e.g. `eventName=data-request`) was already correct — logfmt
+  # parsing normalizes quoted/unquoted values the same way.
   query_params = {
-    expr = "count_over_time({job=\"usage-insights\"} | logfmt | eventName=\"data-request\" [5m])"
+    expr = "count_over_time({service_name=\"grafana\"} | logfmt | eventName=\"data-request\" [5m])"
   }
 
   training_window = 2592000 # 30d

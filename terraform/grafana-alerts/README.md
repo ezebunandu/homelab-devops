@@ -134,9 +134,13 @@ can't be known before that.
 
 ### Open items to verify at apply time
 
-- The usage-insights LogQL in `query_volume_forecast`'s `query_params.expr`
-  (`eventName="data-request"`, the `job="usage-insights"` label) is
-  unverified against this stack's real schema — check in Explore first.
+- ~~The usage-insights LogQL in `query_volume_forecast`'s `query_params.expr`~~
+  — verified against a real log line in Explore. There's no `job` indexed
+  label on this datasource at all (that guess matched nothing — first
+  training run was "ready" but warned "No series to train"); the real
+  indexed labels are `instance_id`, `instance_type`, `org_id`,
+  `service_name`. Fixed to `{service_name="grafana"}`. `eventName="data-request"`
+  was already correct.
 - This module no longer mints or uses any OnCall/Funnel resources for the
   query-volume-anomaly alert — the correlator (deployed via homelab-platform)
   polls Grafana Cloud's Alerting API for firing `source="query-anomaly"`
