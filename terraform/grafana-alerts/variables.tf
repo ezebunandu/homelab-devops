@@ -24,3 +24,13 @@ variable "deadmansswitch_webhook_url" {
   description = "Heartbeat receiver URL for the dead-man's-switch — NOT a Discord webhook. The DMS fires continuously; this endpoint must ALARM WHEN THE PINGS STOP (e.g. a healthchecks.io check URL, Grafana OnCall heartbeat, Better Uptime). Discord can't detect absence, so it can't serve as the DMS receiver directly — instead configure that heartbeat service to notify your Discord when the check goes silent."
   type        = string
 }
+
+variable "usage_insights_datasource_uid" {
+  description = "UID of the stack's Grafana Cloud usage-insights Loki datasource (e.g. 'grafanacloud-<stack>-usage-insights') — the query-volume forecast ML job trains on it. Find it under Connections → Data sources."
+  type        = string
+}
+
+variable "ml_metrics_datasource_uid" {
+  description = "UID of the stack's auto-provisioned 'grafanacloud-ml-metrics' Prometheus datasource — the query-volume anomaly rule reads the forecast's :actual/:predicted series from it. Only resolvable AFTER the query_volume_forecast ML job has run at least once (Grafana provisions this datasource on the job's first successful run). No default: the first apply must scope to just the ML job with `-target=grafana_machine_learning_job.query_volume_forecast` (this var can be any placeholder string for that apply, since nothing referencing it is targeted yet); once the UID is known, a normal apply wires the rule to it. See README."
+  type        = string
+}

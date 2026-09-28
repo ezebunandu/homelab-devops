@@ -13,3 +13,9 @@ variable "vault_secret_path" {
   type        = string
   default     = "grafana-cloud"
 }
+
+variable "correlator_bootstrap_vault_secret_path" {
+  description = "KV v2 secret path (under mount 'secret'), manually pre-seeded, holding the correlator's non-Grafana-Cloud secrets: tailscale_auth_key, discord_webhook_url, webhook_shared_secret."
+  type        = string
+  default     = "correlator-bootstrap"
+}
