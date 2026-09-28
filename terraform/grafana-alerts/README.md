@@ -140,7 +140,10 @@ can't be known before that.
   training run was "ready" but warned "No series to train"); the real
   indexed labels are `instance_id`, `instance_type`, `org_id`,
   `service_name`. Fixed to `{service_name="grafana"}`. `eventName="data-request"`
-  was already correct.
+  was already correct. Second issue found on the next run: without
+  aggregation, `| logfmt`'s extracted fields (`panelId`, `duration`, etc.)
+  push the query past Loki's 5000-series cap — fixed by wrapping the whole
+  expression in `sum(...)`.
 - This module no longer mints or uses any OnCall/Funnel resources for the
   query-volume-anomaly alert — the correlator (deployed via homelab-platform)
   polls Grafana Cloud's Alerting API for firing `source="query-anomaly"`
