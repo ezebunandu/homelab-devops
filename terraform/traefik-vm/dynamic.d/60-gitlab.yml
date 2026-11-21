@@ -1,0 +1,26 @@
+http:
+  routers:
+    gitlab:
+      rule: "Host(`gitlab.lab.hezebonica.ca`)"
+      entryPoints: [websecure]
+      service: gitlab
+      tls:
+        certResolver: cloudflare
+
+  services:
+    gitlab:
+      loadBalancer:
+        servers:
+          # GitLab workhorse, exposed via MetalLB at 192.168.57.102:8181.
+          # IMPORTANT: target the workhorse port (8181), NOT the Rails/puma
+          # port (8080). Workhorse serves the precompiled static assets and
+          # proxies dynamic requests to Rails; hitting :8080 directly makes
+          # Rails 302 asset requests to /users/sign_in and the UI renders
+          # unstyled.
+          # Plain HTTP upstream — the GitLab chart's ingress is disabled
+          # (apps/gitlab/values.yaml in homelab-platform); Traefik terminates
+          # HTTPS at the edge with the wildcard cert, matching the
+          # harbor/vault pattern.
+          # loadBalancerIP is pinned to .102 in apps/gitlab/values.yaml; if the
+          # MetalLB pool or pin ever changes, update this URL to match.
+          - url: "http://192.168.57.102:8181"
